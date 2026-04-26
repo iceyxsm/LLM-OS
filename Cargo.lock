@@ -195,6 +195,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "common-types",
+ "policy-engine",
  "tokio",
  "tracing",
  "tracing-subscriber",
