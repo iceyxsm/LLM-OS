@@ -32,3 +32,14 @@ Notes:
 - Your benchmark script should print one JSON object to stdout with metric keys used in the CSV.
 - Optional hooks: `-PreRunCommand` and `-PostRunCommand` support row token expansion, for example `{compression_profile}`.
 - `-DryRun` is side-effect free by default; add `-MarkDryRun` if you want to persist `run_success=dry-run` and notes into the CSV.
+
+## Summarize benchmark results
+Generate JSON summary statistics from a benchmark plan:
+
+```bash
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/memory/summarize-benchmark-plan.ps1 \
+  -PlanPath scripts/memory/benchmark_plan.csv
+```
+
+By default, summary metrics are computed from successful rows only (`run_success=true`).
+Add `-IncludeFailed` to include all rows in per-profile aggregates.
