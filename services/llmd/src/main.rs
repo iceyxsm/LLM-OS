@@ -2,8 +2,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use common_types::{ActionRequest, ModuleDescriptor};
 use llmd::{
-    process_action, AuditSink, GrpcPolicyDecisionClient, JsonlFileAuditSink, NoopExecutor,
-    StdoutAuditSink,
+    process_action, AuditSink, GrpcPolicyClientConfig, GrpcPolicyDecisionClient,
+    JsonlFileAuditSink, NoopExecutor, StdoutAuditSink,
 };
 use tracing::{info, warn};
 
@@ -24,12 +24,32 @@ async fn main() -> anyhow::Result<()> {
 
     let endpoint = std::env::var("LLMOS_POLICY_ENDPOINT")
         .unwrap_or_else(|_| "http://127.0.0.1:50051".to_string());
-    let timeout = std::time::Duration::from_secs(
+    let timeout_per_attempt = std::time::Duration::from_secs(
         std::env::var("LLMOS_POLICY_TIMEOUT_SECS")
             .ok()
             .and_then(|value| value.parse().ok())
             .unwrap_or(2),
     );
+    let max_attempts = std::env::var("LLMOS_POLICY_MAX_ATTEMPTS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(3);
+    let initial_backoff_ms = std::env::var("LLMOS_POLICY_BACKOFF_INITIAL_MS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(100);
+    let max_backoff_ms = std::env::var("LLMOS_POLICY_BACKOFF_MAX_MS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(1_000);
+    let breaker_threshold = std::env::var("LLMOS_POLICY_BREAKER_THRESHOLD")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(3);
+    let breaker_cooldown_secs = std::env::var("LLMOS_POLICY_BREAKER_COOLDOWN_SECS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(5);
 
     let correlation_id = generate_id("corr");
     let audit_sink: Box<dyn AuditSink> = if let Ok(path) = std::env::var("LLMOS_AUDIT_JSONL_PATH") {
@@ -43,12 +63,26 @@ async fn main() -> anyhow::Result<()> {
         target: "llmd",
         module = ?module,
         policy_endpoint = %endpoint,
-        policy_timeout_secs = timeout.as_secs(),
+        policy_timeout_secs = timeout_per_attempt.as_secs(),
+        policy_max_attempts = max_attempts,
+        policy_backoff_initial_ms = initial_backoff_ms,
+        policy_backoff_max_ms = max_backoff_ms,
+        policy_breaker_threshold = breaker_threshold,
+        policy_breaker_cooldown_secs = breaker_cooldown_secs,
         correlation_id = %correlation_id,
         "llmd bootstrap complete"
     );
 
-    let mut policy_client = GrpcPolicyDecisionClient::connect(endpoint, timeout).await?;
+    let policy_config = GrpcPolicyClientConfig {
+        timeout_per_attempt,
+        max_attempts,
+        initial_backoff: std::time::Duration::from_millis(initial_backoff_ms),
+        max_backoff: std::time::Duration::from_millis(max_backoff_ms),
+        circuit_breaker_threshold: breaker_threshold,
+        circuit_breaker_cooldown: std::time::Duration::from_secs(breaker_cooldown_secs),
+    };
+    let mut policy_client =
+        GrpcPolicyDecisionClient::connect_with_config(endpoint, policy_config).await?;
     let executor = NoopExecutor;
     let startup_requests = [
         build_request(

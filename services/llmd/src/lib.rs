@@ -3,7 +3,7 @@ use std::{
     io::Write,
     path::Path,
     sync::Mutex,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use async_trait::async_trait;
@@ -100,13 +100,64 @@ impl ActionExecutor for NoopExecutor {
 
 pub struct GrpcPolicyDecisionClient {
     inner: PolicyServiceClient<Channel>,
-    timeout: Duration,
+    timeout_per_attempt: Duration,
+    max_attempts: usize,
+    initial_backoff: Duration,
+    max_backoff: Duration,
+    circuit_breaker_threshold: u32,
+    circuit_breaker_cooldown: Duration,
+    consecutive_failures: u32,
+    circuit_open_until: Option<Instant>,
+}
+
+#[derive(Debug, Clone)]
+pub struct GrpcPolicyClientConfig {
+    pub timeout_per_attempt: Duration,
+    pub max_attempts: usize,
+    pub initial_backoff: Duration,
+    pub max_backoff: Duration,
+    pub circuit_breaker_threshold: u32,
+    pub circuit_breaker_cooldown: Duration,
+}
+
+impl Default for GrpcPolicyClientConfig {
+    fn default() -> Self {
+        Self {
+            timeout_per_attempt: Duration::from_secs(2),
+            max_attempts: 3,
+            initial_backoff: Duration::from_millis(100),
+            max_backoff: Duration::from_secs(1),
+            circuit_breaker_threshold: 3,
+            circuit_breaker_cooldown: Duration::from_secs(5),
+        }
+    }
 }
 
 impl GrpcPolicyDecisionClient {
     pub async fn connect(endpoint: String, timeout: Duration) -> anyhow::Result<Self> {
+        let config = GrpcPolicyClientConfig {
+            timeout_per_attempt: timeout,
+            ..GrpcPolicyClientConfig::default()
+        };
+        Self::connect_with_config(endpoint, config).await
+    }
+
+    pub async fn connect_with_config(
+        endpoint: String,
+        config: GrpcPolicyClientConfig,
+    ) -> anyhow::Result<Self> {
         let inner = PolicyServiceClient::connect(endpoint).await?;
-        Ok(Self { inner, timeout })
+        Ok(Self {
+            inner,
+            timeout_per_attempt: config.timeout_per_attempt,
+            max_attempts: config.max_attempts.max(1),
+            initial_backoff: config.initial_backoff,
+            max_backoff: config.max_backoff,
+            circuit_breaker_threshold: config.circuit_breaker_threshold.max(1),
+            circuit_breaker_cooldown: config.circuit_breaker_cooldown,
+            consecutive_failures: 0,
+            circuit_open_until: None,
+        })
     }
 }
 
@@ -116,63 +167,158 @@ impl PolicyDecisionClient for GrpcPolicyDecisionClient {
         &mut self,
         request: &ActionRequest,
     ) -> Result<PolicyDecisionRecord, LlmOsError> {
-        let mut grpc_request = Request::new(EvaluatePolicyRequest {
-            subject: request.subject.clone(),
-            action: request.action.clone(),
-            resource: request.resource.clone(),
-        });
+        self.fail_if_circuit_open()?;
 
-        let request_id = MetadataValue::try_from(request.request_id.as_str()).map_err(|_| {
+        for attempt in 1..=self.max_attempts {
+            let grpc_request = build_grpc_request(request)?;
+            let call_result =
+                tokio::time::timeout(self.timeout_per_attempt, self.inner.evaluate(grpc_request))
+                    .await;
+
+            match call_result {
+                Ok(Ok(response)) => {
+                    self.mark_success();
+                    return Ok(map_grpc_decision(request, response.into_inner()));
+                }
+                Ok(Err(status)) => {
+                    let retryable = is_retryable_status(&status);
+                    let message = format!(
+                        "policy service returned {}: {}",
+                        status.code(),
+                        status.message()
+                    );
+
+                    if retryable && attempt < self.max_attempts {
+                        tokio::time::sleep(backoff_for_attempt(
+                            attempt,
+                            self.initial_backoff,
+                            self.max_backoff,
+                        ))
+                        .await;
+                        continue;
+                    }
+
+                    self.mark_failure();
+                    return Err(LlmOsError::PolicyUnavailable(message));
+                }
+                Err(_) => {
+                    if attempt < self.max_attempts {
+                        tokio::time::sleep(backoff_for_attempt(
+                            attempt,
+                            self.initial_backoff,
+                            self.max_backoff,
+                        ))
+                        .await;
+                        continue;
+                    }
+
+                    self.mark_failure();
+                    return Err(LlmOsError::PolicyUnavailable(
+                        "policy evaluation timed out; denying request by default".to_string(),
+                    ));
+                }
+            }
+        }
+
+        self.mark_failure();
+        Err(LlmOsError::PolicyUnavailable(
+            "policy service failed after retries".to_string(),
+        ))
+    }
+}
+
+fn build_grpc_request(
+    request: &ActionRequest,
+) -> Result<Request<EvaluatePolicyRequest>, LlmOsError> {
+    let mut grpc_request = Request::new(EvaluatePolicyRequest {
+        subject: request.subject.clone(),
+        action: request.action.clone(),
+        resource: request.resource.clone(),
+    });
+
+    let request_id = MetadataValue::try_from(request.request_id.as_str()).map_err(|_| {
+        LlmOsError::PolicyUnavailable("request_id contains invalid metadata characters".to_string())
+    })?;
+    let correlation_id =
+        MetadataValue::try_from(request.correlation_id.as_str()).map_err(|_| {
             LlmOsError::PolicyUnavailable(
-                "request_id contains invalid metadata characters".to_string(),
+                "correlation_id contains invalid metadata characters".to_string(),
             )
         })?;
-        let correlation_id =
-            MetadataValue::try_from(request.correlation_id.as_str()).map_err(|_| {
-                LlmOsError::PolicyUnavailable(
-                    "correlation_id contains invalid metadata characters".to_string(),
-                )
-            })?;
 
-        grpc_request
-            .metadata_mut()
-            .insert("x-request-id", request_id);
-        grpc_request
-            .metadata_mut()
-            .insert("x-correlation-id", correlation_id);
+    grpc_request
+        .metadata_mut()
+        .insert("x-request-id", request_id);
+    grpc_request
+        .metadata_mut()
+        .insert("x-correlation-id", correlation_id);
+    Ok(grpc_request)
+}
 
-        let rpc_result = tokio::time::timeout(self.timeout, self.inner.evaluate(grpc_request))
-            .await
-            .map_err(|_| {
-                LlmOsError::PolicyUnavailable(
-                    "policy evaluation timed out; denying request by default".to_string(),
-                )
-            })?
-            .map_err(|status| {
-                LlmOsError::PolicyUnavailable(format!(
-                    "policy service returned error: {}",
-                    status.message()
-                ))
-            })?
-            .into_inner();
+fn map_grpc_decision(
+    request: &ActionRequest,
+    response: controlplane_api::EvaluatePolicyResponse,
+) -> PolicyDecisionRecord {
+    let effect = match response.effect.as_str() {
+        "allow" => PolicyEffect::Allow,
+        _ => PolicyEffect::Deny,
+    };
 
-        let effect = match rpc_result.effect.as_str() {
-            "allow" => PolicyEffect::Allow,
-            _ => PolicyEffect::Deny,
-        };
+    let rule_id = if response.rule_id.is_empty() {
+        None
+    } else {
+        Some(response.rule_id)
+    };
 
-        let rule_id = if rpc_result.rule_id.is_empty() {
-            None
-        } else {
-            Some(rpc_result.rule_id)
-        };
+    PolicyDecisionRecord {
+        version: request.version.clone(),
+        effect,
+        reason: response.reason,
+        rule_id,
+    }
+}
 
-        Ok(PolicyDecisionRecord {
-            version: request.version.clone(),
-            effect,
-            reason: rpc_result.reason,
-            rule_id,
-        })
+fn is_retryable_status(status: &tonic::Status) -> bool {
+    matches!(
+        status.code(),
+        tonic::Code::Unavailable | tonic::Code::DeadlineExceeded
+    )
+}
+
+fn backoff_for_attempt(attempt: usize, initial: Duration, max: Duration) -> Duration {
+    let multiplier = 1u32
+        .checked_shl(attempt.saturating_sub(1).min(30) as u32)
+        .unwrap_or(u32::MAX);
+    let raw_ms = initial
+        .as_millis()
+        .saturating_mul(multiplier as u128)
+        .min(max.as_millis());
+    Duration::from_millis(raw_ms as u64)
+}
+
+impl GrpcPolicyDecisionClient {
+    fn fail_if_circuit_open(&mut self) -> Result<(), LlmOsError> {
+        if let Some(until) = self.circuit_open_until {
+            if Instant::now() < until {
+                return Err(LlmOsError::PolicyUnavailable(
+                    "policy circuit breaker open; failing closed".to_string(),
+                ));
+            }
+            self.circuit_open_until = None;
+        }
+        Ok(())
+    }
+
+    fn mark_success(&mut self) {
+        self.consecutive_failures = 0;
+        self.circuit_open_until = None;
+    }
+
+    fn mark_failure(&mut self) {
+        self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+        if self.consecutive_failures >= self.circuit_breaker_threshold {
+            self.circuit_open_until = Some(Instant::now() + self.circuit_breaker_cooldown);
+        }
     }
 }
 

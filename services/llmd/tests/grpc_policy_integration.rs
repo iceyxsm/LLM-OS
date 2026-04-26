@@ -9,7 +9,8 @@ use controlplane_api::{
     EvaluatePolicyRequest, EvaluatePolicyResponse,
 };
 use llmd::{
-    process_action, ActionExecutor, GrpcPolicyDecisionClient, NoopExecutor, StdoutAuditSink,
+    process_action, ActionExecutor, GrpcPolicyClientConfig, GrpcPolicyDecisionClient, NoopExecutor,
+    StdoutAuditSink,
 };
 use policy_engine::{
     grpc::PolicyGrpcService,
@@ -144,6 +145,73 @@ async fn grpc_propagates_request_and_correlation_ids_in_metadata() {
     let _ = shutdown.send(());
 }
 
+#[tokio::test]
+async fn grpc_retries_transient_failures_then_succeeds() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let (endpoint, shutdown) = spawn_flaky_server(attempts.clone(), 2).await;
+
+    let config = GrpcPolicyClientConfig {
+        timeout_per_attempt: std::time::Duration::from_secs(2),
+        max_attempts: 3,
+        initial_backoff: std::time::Duration::from_millis(10),
+        max_backoff: std::time::Duration::from_millis(20),
+        circuit_breaker_threshold: 10,
+        circuit_breaker_cooldown: std::time::Duration::from_secs(1),
+    };
+    let mut client = GrpcPolicyDecisionClient::connect_with_config(endpoint, config)
+        .await
+        .expect("failed to connect policy client");
+    let audit = StdoutAuditSink;
+    let executor = CountingExecutor::new();
+
+    let result = process_action(&mut client, test_request(), &executor, &audit)
+        .await
+        .expect("request should succeed after retries");
+
+    assert_eq!(result.status, ActionStatus::Executed);
+    assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    assert_eq!(executor.calls(), 1);
+
+    let _ = shutdown.send(());
+}
+
+#[tokio::test]
+async fn grpc_circuit_breaker_opens_after_repeated_failures() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let (endpoint, shutdown) = spawn_flaky_server(attempts.clone(), usize::MAX).await;
+
+    let config = GrpcPolicyClientConfig {
+        timeout_per_attempt: std::time::Duration::from_millis(200),
+        max_attempts: 1,
+        initial_backoff: std::time::Duration::from_millis(10),
+        max_backoff: std::time::Duration::from_millis(20),
+        circuit_breaker_threshold: 1,
+        circuit_breaker_cooldown: std::time::Duration::from_secs(30),
+    };
+    let mut client = GrpcPolicyDecisionClient::connect_with_config(endpoint, config)
+        .await
+        .expect("failed to connect policy client");
+    let audit = StdoutAuditSink;
+    let executor = CountingExecutor::new();
+
+    let first = process_action(&mut client, test_request(), &executor, &audit)
+        .await
+        .expect_err("first failure should deny");
+    assert!(matches!(first, LlmOsError::ActionDenied(_)));
+
+    let second = process_action(&mut client, test_request(), &executor, &audit)
+        .await
+        .expect_err("second request should fail fast from open circuit");
+    assert!(
+        matches!(second, LlmOsError::ActionDenied(msg) if msg.contains("circuit breaker open"))
+    );
+
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    assert_eq!(executor.calls(), 0);
+
+    let _ = shutdown.send(());
+}
+
 fn test_request() -> ActionRequest {
     ActionRequest {
         version: "v1".to_string(),
@@ -189,6 +257,35 @@ async fn spawn_capture_server(
         .expect("failed to read capture test listener addr");
 
     let service = MetadataCaptureService { captured };
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+
+    tokio::spawn(async move {
+        let _ = Server::builder()
+            .add_service(PolicyServiceServer::new(service))
+            .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
+                let _ = shutdown_rx.await;
+            })
+            .await;
+    });
+
+    (format!("http://{}", addr), shutdown_tx)
+}
+
+async fn spawn_flaky_server(
+    attempts: Arc<AtomicUsize>,
+    fail_for_attempts: usize,
+) -> (String, tokio::sync::oneshot::Sender<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("failed to bind flaky test listener");
+    let addr = listener
+        .local_addr()
+        .expect("failed to read flaky test listener addr");
+
+    let service = FlakyPolicyService {
+        attempts,
+        fail_for_attempts,
+    };
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
     tokio::spawn(async move {
@@ -250,6 +347,31 @@ impl CountingExecutor {
 
     fn calls(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
+    }
+}
+
+#[derive(Clone)]
+struct FlakyPolicyService {
+    attempts: Arc<AtomicUsize>,
+    fail_for_attempts: usize,
+}
+
+#[tonic::async_trait]
+impl PolicyService for FlakyPolicyService {
+    async fn evaluate(
+        &self,
+        _request: Request<EvaluatePolicyRequest>,
+    ) -> Result<Response<EvaluatePolicyResponse>, Status> {
+        let attempt = self.attempts.fetch_add(1, Ordering::SeqCst) + 1;
+        if attempt <= self.fail_for_attempts {
+            return Err(Status::unavailable("transient unavailable"));
+        }
+
+        Ok(Response::new(EvaluatePolicyResponse {
+            effect: "allow".to_string(),
+            reason: "allowed after retries".to_string(),
+            rule_id: "allow-after-retry".to_string(),
+        }))
     }
 }
 
