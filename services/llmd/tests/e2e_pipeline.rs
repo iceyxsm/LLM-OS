@@ -2,14 +2,10 @@ use std::sync::{Arc, Mutex};
 
 use common_types::{ActionRequest, ActionStatus, AuditEvent, LlmOsError};
 use controlplane_api::{
-    health_service_client::HealthServiceClient,
-    health_service_server::HealthServiceServer,
-    policy_service_server::PolicyServiceServer,
-    HealthCheckRequest,
+    health_service_client::HealthServiceClient, health_service_server::HealthServiceServer,
+    policy_service_server::PolicyServiceServer, HealthCheckRequest,
 };
-use llmd::{
-    process_action, GrpcPolicyDecisionClient, NoopExecutor, AuditSink,
-};
+use llmd::{process_action, AuditSink, GrpcPolicyDecisionClient, NoopExecutor};
 use policy_engine::{
     grpc::{HealthGrpcService, PolicyGrpcService},
     model::{PolicyDocument, PolicyRule, RuleEffect},

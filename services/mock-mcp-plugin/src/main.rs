@@ -94,10 +94,7 @@ fn handle_request(request: &JsonRpcRequest) -> JsonRpcResponse {
 }
 
 fn handle_tool_call(id: Value, params: &Value) -> JsonRpcResponse {
-    let tool_name = params
-        .get("name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
 
     match tool_name {
         "echo" => {
@@ -137,11 +134,8 @@ fn main() -> anyhow::Result<()> {
         let request: JsonRpcRequest = match serde_json::from_str(trimmed) {
             Ok(req) => req,
             Err(err) => {
-                let response = JsonRpcResponse::error(
-                    Value::Null,
-                    -32700,
-                    format!("parse error: {err}"),
-                );
+                let response =
+                    JsonRpcResponse::error(Value::Null, -32700, format!("parse error: {err}"));
                 let out = serde_json::to_string(&response)?;
                 writeln!(stdout, "{out}")?;
                 stdout.flush()?;

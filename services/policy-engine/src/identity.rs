@@ -48,8 +48,14 @@ mod tests {
 
     #[test]
     fn exact_match() {
-        assert!(subject_matches("runtime/model-runtime", "runtime/model-runtime"));
-        assert!(!subject_matches("runtime/model-runtime", "runtime/mcp-runtime"));
+        assert!(subject_matches(
+            "runtime/model-runtime",
+            "runtime/model-runtime"
+        ));
+        assert!(!subject_matches(
+            "runtime/model-runtime",
+            "runtime/mcp-runtime"
+        ));
     }
 
     #[test]

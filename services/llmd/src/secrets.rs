@@ -16,18 +16,9 @@ pub fn build_llmd_secret_store() -> ScopedSecretStore {
     let llmd_module = "runtime/model-runtime".to_string();
 
     // Register known provider credential keys.
-    store.register(
-        "openai_api_key",
-        HashSet::from([llmd_module.clone()]),
-    );
-    store.register(
-        "anthropic_api_key",
-        HashSet::from([llmd_module.clone()]),
-    );
-    store.register(
-        "local_model_path",
-        HashSet::from([llmd_module.clone()]),
-    );
+    store.register("openai_api_key", HashSet::from([llmd_module.clone()]));
+    store.register("anthropic_api_key", HashSet::from([llmd_module.clone()]));
+    store.register("local_model_path", HashSet::from([llmd_module.clone()]));
 
     let shared = Arc::new(RwLock::new(store));
     info!(target: "llmd::secrets", "secret store initialized with provider credential keys");

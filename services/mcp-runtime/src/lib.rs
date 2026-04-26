@@ -9,7 +9,7 @@ use tokio::time::{timeout, Duration};
 use tracing::{info, warn};
 
 pub mod sandbox;
-pub use sandbox::{PluginSandboxConfig, resolve_sandbox};
+pub use sandbox::{resolve_sandbox, PluginSandboxConfig};
 
 const STOP_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -92,11 +92,8 @@ impl RuntimeManager {
             .cloned()
             .ok_or_else(|| anyhow!("plugin '{}' was not found in loaded manifests", id))?;
 
-        let sandbox = sandbox::resolve_sandbox(
-            &manifest.id,
-            &manifest.capabilities,
-            "/opt/llmos/plugins",
-        );
+        let sandbox =
+            sandbox::resolve_sandbox(&manifest.id, &manifest.capabilities, "/opt/llmos/plugins");
         self.sandbox_configs.insert(id.to_string(), sandbox);
 
         let child = spawn_process(&manifest)?;

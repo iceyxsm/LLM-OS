@@ -13,10 +13,7 @@ pub enum VerificationError {
     #[error("token decode failed: {0}")]
     DecodeFailed(String),
     #[error("subject mismatch: expected {expected}, got {actual}")]
-    SubjectMismatch {
-        expected: String,
-        actual: String,
-    },
+    SubjectMismatch { expected: String, actual: String },
 }
 
 /// Verifies identity tokens.

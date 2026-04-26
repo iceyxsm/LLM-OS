@@ -73,10 +73,7 @@ impl Transport for LocalChannel {
         Ok(())
     }
 
-    async fn subscribe(
-        &self,
-        topic: &str,
-    ) -> Result<mpsc::Receiver<Envelope>, TransportError> {
+    async fn subscribe(&self, topic: &str) -> Result<mpsc::Receiver<Envelope>, TransportError> {
         let (tx, rx) = mpsc::channel(self.capacity);
         let mut map = self
             .subscribers

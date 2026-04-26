@@ -5,11 +5,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use common_types::{ActionRequest, ModuleDescriptor};
 use controlplane_api::{health_service_client::HealthServiceClient, HealthCheckRequest};
 use llmd::{
-    bus::BusAuditSink,
-    init_runtime_metrics, process_action, run_metrics_server,
-    secrets::build_llmd_secret_store,
-    AuditSink, GrpcPolicyClientConfig,
-    GrpcPolicyDecisionClient, JsonlFileAuditSink, NoopExecutor, RuntimeMetrics, StdoutAuditSink,
+    bus::BusAuditSink, init_runtime_metrics, process_action, run_metrics_server,
+    secrets::build_llmd_secret_store, AuditSink, GrpcPolicyClientConfig, GrpcPolicyDecisionClient,
+    JsonlFileAuditSink, NoopExecutor, RuntimeMetrics, StdoutAuditSink,
 };
 use llmos_service_bus::LocalChannel;
 use tonic::metadata::MetadataValue;
