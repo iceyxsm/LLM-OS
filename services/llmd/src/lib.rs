@@ -1,7 +1,8 @@
 use std::{
+    fs,
     fs::OpenOptions,
     io::Write,
-    path::Path,
+    path::{Path, PathBuf},
     sync::Mutex,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -40,47 +41,141 @@ impl AuditSink for StdoutAuditSink {
 }
 
 pub struct JsonlFileAuditSink {
-    file: Mutex<std::fs::File>,
+    path: PathBuf,
+    max_bytes: u64,
+    max_files: usize,
+    state: Mutex<JsonlAuditState>,
+}
+
+struct JsonlAuditState {
+    file: Option<std::fs::File>,
+    bytes_written: u64,
 }
 
 impl JsonlFileAuditSink {
     pub fn new(path: impl AsRef<Path>) -> anyhow::Result<Self> {
+        Self::new_with_rotation(path, 10 * 1024 * 1024, 5)
+    }
+
+    pub fn new_with_rotation(
+        path: impl AsRef<Path>,
+        max_bytes: u64,
+        max_files: usize,
+    ) -> anyhow::Result<Self> {
         let path = path.as_ref();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
 
         let file = OpenOptions::new().create(true).append(true).open(path)?;
+        let bytes_written = file.metadata().map(|m| m.len()).unwrap_or(0);
         Ok(Self {
-            file: Mutex::new(file),
+            path: path.to_path_buf(),
+            max_bytes,
+            max_files: max_files.max(1),
+            state: Mutex::new(JsonlAuditState {
+                file: Some(file),
+                bytes_written,
+            }),
         })
+    }
+
+    fn rotate_files(&self, state: &mut JsonlAuditState) -> anyhow::Result<()> {
+        if let Some(mut file) = state.file.take() {
+            let _ = file.flush();
+            drop(file);
+        }
+
+        for idx in (1..=self.max_files).rev() {
+            let src = if idx == 1 {
+                self.path.clone()
+            } else {
+                rotated_path(&self.path, idx - 1)
+            };
+            let dst = rotated_path(&self.path, idx);
+
+            if !src.exists() {
+                continue;
+            }
+
+            if dst.exists() {
+                fs::remove_file(&dst)?;
+            }
+            fs::rename(src, dst)?;
+        }
+
+        let file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&self.path)?;
+        state.file = Some(file);
+        state.bytes_written = 0;
+        Ok(())
     }
 }
 
 impl AuditSink for JsonlFileAuditSink {
     fn emit(&self, event: &AuditEvent) {
-        let mut file = match self.file.lock() {
-            Ok(file) => file,
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
             Err(_) => {
                 warn!(target: "llmd::audit", "failed to acquire audit file lock");
                 return;
             }
         };
 
-        if let Err(err) = serde_json::to_writer(&mut *file, event) {
-            warn!(target: "llmd::audit", error = %err, "failed to serialize audit event");
-            return;
+        let mut payload = match serde_json::to_vec(event) {
+            Ok(payload) => payload,
+            Err(err) => {
+                warn!(target: "llmd::audit", error = %err, "failed to serialize audit event");
+                return;
+            }
+        };
+        payload.push(b'\n');
+
+        if state.bytes_written + payload.len() as u64 > self.max_bytes {
+            if let Err(err) = self.rotate_files(&mut state) {
+                warn!(target: "llmd::audit", error = %err, "failed to rotate audit log files");
+                return;
+            }
         }
 
-        if let Err(err) = writeln!(file) {
-            warn!(target: "llmd::audit", error = %err, "failed to write audit newline");
-            return;
+        if state.file.is_none() {
+            match OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&self.path)
+            {
+                Ok(file) => {
+                    state.bytes_written = file.metadata().map(|m| m.len()).unwrap_or(0);
+                    state.file = Some(file);
+                }
+                Err(err) => {
+                    warn!(target: "llmd::audit", error = %err, "failed to open audit log file");
+                    return;
+                }
+            }
         }
 
-        if let Err(err) = file.flush() {
-            warn!(target: "llmd::audit", error = %err, "failed to flush audit log file");
+        {
+            let file = state.file.as_mut().expect("file must be present");
+            if let Err(err) = file.write_all(&payload) {
+                warn!(target: "llmd::audit", error = %err, "failed to write audit event");
+                return;
+            }
+            if let Err(err) = file.flush() {
+                warn!(target: "llmd::audit", error = %err, "failed to flush audit log file");
+                return;
+            }
         }
+        state.bytes_written = state.bytes_written.saturating_add(payload.len() as u64);
     }
+}
+
+fn rotated_path(path: &Path, index: usize) -> PathBuf {
+    let display = path.as_os_str().to_string_lossy();
+    PathBuf::from(format!("{display}.{index}"))
 }
 
 pub struct NoopExecutor;
@@ -618,5 +713,48 @@ mod tests {
         assert_eq!(parsed.outcome, ActionStatus::Executed);
 
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn jsonl_audit_sink_rotates_by_size() {
+        let unique = format!(
+            "llmos_audit_rotate_test_{}_{}.jsonl",
+            std::process::id(),
+            now_unix_millis()
+        );
+        let path: PathBuf = std::env::temp_dir().join(unique);
+        let rotated_1 = PathBuf::from(format!("{}.1", path.display()));
+        let rotated_2 = PathBuf::from(format!("{}.2", path.display()));
+
+        let sink = JsonlFileAuditSink::new_with_rotation(&path, 220, 2)
+            .expect("failed to create rotating jsonl sink");
+
+        for idx in 0..6 {
+            let event = AuditEvent {
+                version: "v1".to_string(),
+                request_id: format!("req-rotate-{idx}"),
+                correlation_id: "corr-rotate".to_string(),
+                timestamp_unix_ms: now_unix_millis(),
+                subject: "runtime/model-runtime".to_string(),
+                action: "network:connect".to_string(),
+                resource: "api.openai.com".to_string(),
+                decision: PolicyDecisionRecord {
+                    version: "v1".to_string(),
+                    effect: PolicyEffect::Allow,
+                    reason: "allowed by matching rule".to_string(),
+                    rule_id: Some("allow-network".to_string()),
+                },
+                outcome: ActionStatus::Executed,
+            };
+            sink.emit(&event);
+        }
+
+        assert!(path.exists(), "expected active audit file");
+        assert!(rotated_1.exists(), "expected first rotated file");
+        assert!(rotated_2.exists(), "expected second rotated file");
+
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(rotated_1);
+        let _ = std::fs::remove_file(rotated_2);
     }
 }

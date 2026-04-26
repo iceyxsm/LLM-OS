@@ -1,6 +1,9 @@
 use clap::{Args, Parser, Subcommand};
 use common_types::ModuleDescriptor;
-use controlplane_api::{policy_service_client::PolicyServiceClient, EvaluatePolicyRequest};
+use controlplane_api::{
+    health_service_client::HealthServiceClient, policy_service_client::PolicyServiceClient,
+    EvaluatePolicyRequest, HealthCheckRequest,
+};
 use tonic::metadata::MetadataValue;
 
 #[derive(Parser, Debug)]
@@ -22,6 +25,7 @@ enum Command {
 #[derive(Subcommand, Debug)]
 enum PolicyCommand {
     Check(PolicyCheckArgs),
+    Health(PolicyHealthArgs),
 }
 
 #[derive(Args, Debug)]
@@ -32,6 +36,14 @@ struct PolicyCheckArgs {
     action: String,
     #[arg(long)]
     resource: String,
+    #[arg(long, default_value = "http://127.0.0.1:50051")]
+    endpoint: String,
+    #[arg(long, default_value_t = 2)]
+    timeout_secs: u64,
+}
+
+#[derive(Args, Debug)]
+struct PolicyHealthArgs {
     #[arg(long, default_value = "http://127.0.0.1:50051")]
     endpoint: String,
     #[arg(long, default_value_t = 2)]
@@ -68,6 +80,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Policy { command } => match command {
             PolicyCommand::Check(args) => run_policy_check(args).await?,
+            PolicyCommand::Health(args) => run_policy_health(args).await?,
         },
     }
 
@@ -122,4 +135,38 @@ fn generate_id(prefix: &str) -> String {
         .unwrap_or_default();
     let sequence = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     format!("{}-{}-{}", prefix, ts, sequence)
+}
+
+async fn run_policy_health(args: PolicyHealthArgs) -> anyhow::Result<()> {
+    let request_id = generate_id("cli-health-req");
+    let correlation_id = generate_id("cli-health-corr");
+    let mut client = HealthServiceClient::connect(args.endpoint.clone()).await?;
+
+    let mut request = tonic::Request::new(HealthCheckRequest {
+        service: "policy-engine".to_string(),
+    });
+    request.metadata_mut().insert(
+        "x-request-id",
+        MetadataValue::try_from(request_id.as_str())?,
+    );
+    request.metadata_mut().insert(
+        "x-correlation-id",
+        MetadataValue::try_from(correlation_id.as_str())?,
+    );
+
+    let started = std::time::Instant::now();
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(args.timeout_secs),
+        client.check(request),
+    )
+    .await??
+    .into_inner();
+    let latency_ms = started.elapsed().as_millis();
+
+    println!("status: {}", response.status);
+    println!("detail: {}", response.detail);
+    println!("latency_ms: {}", latency_ms);
+    println!("request_id: {}", request_id);
+    println!("correlation_id: {}", correlation_id);
+    Ok(())
 }

@@ -34,6 +34,21 @@ A modular operating environment focused on running LLM workloads with strong iso
    cargo run -p llmos-cli -- modules
    ```
 
+## Operator commands
+- Policy decision check:
+  ```bash
+  cargo run -p llmos-cli -- policy check --subject runtime/model-runtime --action network:connect --resource api.openai.com
+  ```
+- Policy health check:
+  ```bash
+  cargo run -p llmos-cli -- policy health
+  ```
+
+## Audit log rotation
+When `LLMOS_AUDIT_JSONL_PATH` is set, `llmd` writes JSONL audit events and rotates by size.
+- `LLMOS_AUDIT_ROTATE_MAX_BYTES` default: `10485760` (10 MB)
+- `LLMOS_AUDIT_ROTATE_MAX_FILES` default: `5`
+
 ## Memory compression experiments
 See `runtime/memory-manager/README.md` and `scripts/memory/` for zram profile application and benchmark capture.
 

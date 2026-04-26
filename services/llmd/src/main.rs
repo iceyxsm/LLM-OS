@@ -56,11 +56,29 @@ async fn main() -> anyhow::Result<()> {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(30);
+    let audit_rotate_max_bytes = std::env::var("LLMOS_AUDIT_ROTATE_MAX_BYTES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(10 * 1024 * 1024);
+    let audit_rotate_max_files = std::env::var("LLMOS_AUDIT_ROTATE_MAX_FILES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(5);
 
     let correlation_id = generate_id("corr");
     let audit_sink: Box<dyn AuditSink> = if let Ok(path) = std::env::var("LLMOS_AUDIT_JSONL_PATH") {
-        info!(target: "llmd", audit_jsonl_path = %path, "using JSONL audit sink");
-        Box::new(JsonlFileAuditSink::new(path)?)
+        info!(
+            target: "llmd",
+            audit_jsonl_path = %path,
+            audit_rotate_max_bytes = audit_rotate_max_bytes,
+            audit_rotate_max_files = audit_rotate_max_files,
+            "using JSONL audit sink"
+        );
+        Box::new(JsonlFileAuditSink::new_with_rotation(
+            path,
+            audit_rotate_max_bytes,
+            audit_rotate_max_files,
+        )?)
     } else {
         Box::new(StdoutAuditSink)
     };
