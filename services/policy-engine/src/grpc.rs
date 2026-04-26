@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use controlplane_api::{
     health_service_server::HealthService, policy_service_server::PolicyService,
@@ -9,6 +10,7 @@ use tracing::info;
 
 use crate::{
     engine::evaluate_policy,
+    metrics::policy_metrics_handle,
     model::{DecisionEffect, DecisionReason, PolicyDocument, PolicyRequest},
 };
 
@@ -29,6 +31,9 @@ impl PolicyService for PolicyGrpcService {
         &self,
         request: Request<EvaluatePolicyRequest>,
     ) -> Result<Response<EvaluatePolicyResponse>, Status> {
+        let metrics = policy_metrics_handle();
+        metrics.inc_evaluate_requests();
+        let started = Instant::now();
         let request_id = metadata_value(&request, "x-request-id");
         let correlation_id = metadata_value(&request, "x-correlation-id");
         let request = request.into_inner();
@@ -39,6 +44,12 @@ impl PolicyService for PolicyGrpcService {
         };
         let decision = evaluate_policy(&self.policy, &input);
         let (effect, reason, rule_id) = map_decision_fields(&decision);
+        if effect == "allow" {
+            metrics.inc_allow();
+        } else {
+            metrics.inc_deny();
+        }
+        metrics.observe_evaluate_latency(started.elapsed());
         info!(
             target: "policy-engine::grpc",
             request_id = request_id.as_deref().unwrap_or("missing"),
@@ -68,6 +79,8 @@ impl HealthService for HealthGrpcService {
         &self,
         request: Request<HealthCheckRequest>,
     ) -> Result<Response<HealthCheckResponse>, Status> {
+        let metrics = policy_metrics_handle();
+        metrics.inc_health_checks();
         let request_id = metadata_value(&request, "x-request-id");
         let correlation_id = metadata_value(&request, "x-correlation-id");
         let request = request.into_inner();

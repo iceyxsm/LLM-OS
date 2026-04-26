@@ -56,6 +56,12 @@ When `LLMOS_AUDIT_JSONL_PATH` is set, `llmd` writes JSONL audit events and rotat
   ```bash
   curl http://127.0.0.1:9090/metrics
   ```
+`policy-engine` also exposes Prometheus-compatible metrics at `GET /metrics`.
+- `LLMOS_POLICY_METRICS_LISTEN` default: `127.0.0.1:9091`
+- Example:
+  ```bash
+  curl http://127.0.0.1:9091/metrics
+  ```
 
 ## Memory compression experiments
 See `runtime/memory-manager/README.md` and `scripts/memory/` for zram profile application and benchmark capture.

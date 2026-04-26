@@ -702,6 +702,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "controlplane-api",
+ "hyper",
  "serde",
  "serde_yaml",
  "tokio",

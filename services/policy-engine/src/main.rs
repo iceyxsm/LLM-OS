@@ -6,9 +6,10 @@ use controlplane_api::{
 use policy_engine::{
     grpc::{HealthGrpcService, PolicyGrpcService},
     loader::load_policy_document,
+    metrics::{init_policy_metrics, run_metrics_server, PolicyEngineMetrics},
 };
 use tonic::transport::Server;
-use tracing::info;
+use tracing::{info, warn};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -24,8 +25,14 @@ async fn main() -> anyhow::Result<()> {
     let listen_addr: std::net::SocketAddr = std::env::var("LLMOS_POLICY_LISTEN")
         .unwrap_or_else(|_| "127.0.0.1:50051".to_string())
         .parse()?;
+    let metrics_listen_addr: std::net::SocketAddr = std::env::var("LLMOS_POLICY_METRICS_LISTEN")
+        .unwrap_or_else(|_| "127.0.0.1:9091".to_string())
+        .parse()?;
     let service = PolicyGrpcService::new(Arc::new(policy.clone()));
     let health_service = HealthGrpcService;
+    let metrics = Arc::new(PolicyEngineMetrics::default());
+    metrics.set_rules_loaded(policy.rules.len());
+    init_policy_metrics(metrics.clone());
 
     info!(
         target: "policy-engine",
@@ -33,12 +40,18 @@ async fn main() -> anyhow::Result<()> {
         version = %policy.version,
         rules = policy.rules.len(),
         listen = %listen_addr,
+        metrics_listen = %metrics_listen_addr,
         "policy engine online"
     );
     info!(
         target: "policy-engine",
         "decision mode: deny overrides allow, default deny"
     );
+    tokio::spawn(async move {
+        if let Err(err) = run_metrics_server(metrics_listen_addr, metrics).await {
+            warn!(target: "policy-engine::metrics", error = %err, "metrics server stopped");
+        }
+    });
 
     Server::builder()
         .add_service(PolicyServiceServer::new(service))
