@@ -569,6 +569,10 @@ dependencies = [
  "clap",
  "common-types",
  "controlplane-api",
+ "hyper",
+ "mcp-runtime",
+ "serde",
+ "serde_json",
  "tokio",
  "tonic",
 ]
@@ -599,6 +603,9 @@ name = "mcp-runtime"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "clap",
+ "serde",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -625,6 +632,13 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "mock-mcp-plugin"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
 ]
 
 [[package]]

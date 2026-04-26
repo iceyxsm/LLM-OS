@@ -1,0 +1,10 @@
+{
+  "id": "mock.mcp.echo",
+  "version": "0.1.0",
+  "entrypoint": "cargo run -p mock-mcp-plugin",
+  "description": "Reference MCP plugin used for local lifecycle testing.",
+  "capabilities": [
+    "mcp:spawn",
+    "audit:emit"
+  ]
+}

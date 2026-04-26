@@ -4,6 +4,7 @@ members = [
   "crates/common-types",
   "services/llmd",
   "services/mcp-runtime",
+  "services/mock-mcp-plugin",
   "services/policy-engine",
   "tools/llmos-cli"
 ]
