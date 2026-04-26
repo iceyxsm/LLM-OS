@@ -5,11 +5,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use common_types::{ActionRequest, ModuleDescriptor};
 use controlplane_api::{health_service_client::HealthServiceClient, HealthCheckRequest};
 use llmd::{
-    bus::BusAuditSink, init_runtime_metrics, process_action, run_metrics_server,
-    secrets::build_llmd_secret_store, AuditSink, GrpcPolicyClientConfig, GrpcPolicyDecisionClient,
-    JsonlFileAuditSink, NoopExecutor, RuntimeMetrics, StdoutAuditSink,
+    bus::BusAuditSink, executor::ModelExecutor, init_runtime_metrics, process_action,
+    run_metrics_server, secrets::build_llmd_secret_store, AuditSink, GrpcPolicyClientConfig,
+    GrpcPolicyDecisionClient, JsonlFileAuditSink, RuntimeMetrics, StdoutAuditSink,
 };
+use llmos_model_runtime::MockBackend;
 use llmos_service_bus::LocalChannel;
+use tokio::sync::RwLock;
 use tonic::metadata::MetadataValue;
 use tracing::{info, warn};
 
@@ -171,7 +173,12 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     });
-    let executor = NoopExecutor;
+    // Initialize the model backend. Uses MockBackend by default.
+    // To use real llama.cpp inference, enable the "llama-cpp" feature on
+    // llmos-model-runtime and replace MockBackend with LlamaCppBackend.
+    let backend = Arc::new(RwLock::new(MockBackend::new()));
+    let executor = ModelExecutor::new(backend);
+
     let startup_requests = [
         build_request(
             "runtime/model-runtime",
@@ -180,6 +187,12 @@ async fn main() -> anyhow::Result<()> {
             &correlation_id,
         ),
         build_request("runtime/mcp-runtime", "fs:write", "/", &correlation_id),
+        build_request(
+            "runtime/model-runtime",
+            "model:invoke",
+            "Hello, world!",
+            &correlation_id,
+        ),
     ];
 
     for request in startup_requests {

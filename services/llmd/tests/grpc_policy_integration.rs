@@ -375,10 +375,14 @@ impl PolicyService for FlakyPolicyService {
     }
 }
 
+#[async_trait::async_trait]
 impl ActionExecutor for CountingExecutor {
-    fn execute(&self, request: &ActionRequest) -> Result<common_types::ActionResult, LlmOsError> {
+    async fn execute(
+        &self,
+        request: &ActionRequest,
+    ) -> Result<common_types::ActionResult, LlmOsError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         let noop = NoopExecutor;
-        noop.execute(request)
+        noop.execute(request).await
     }
 }

@@ -4,6 +4,13 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = []
+llama-cpp = ["dep:llama-cpp-4"]
+cuda = ["llama-cpp", "llama-cpp-4/cuda"]
+metal = ["llama-cpp", "llama-cpp-4/metal"]
+vulkan = ["llama-cpp", "llama-cpp-4/vulkan"]
+
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
@@ -12,3 +19,4 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+llama-cpp-4 = { version = "0.2", optional = true }

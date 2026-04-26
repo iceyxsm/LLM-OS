@@ -39,8 +39,9 @@ pub trait PolicyDecisionClient {
     ) -> Result<PolicyDecisionRecord, LlmOsError>;
 }
 
-pub trait ActionExecutor {
-    fn execute(&self, request: &ActionRequest) -> Result<ActionResult, LlmOsError>;
+#[async_trait]
+pub trait ActionExecutor: Send + Sync {
+    async fn execute(&self, request: &ActionRequest) -> Result<ActionResult, LlmOsError>;
 }
 
 pub trait AuditSink {
@@ -401,8 +402,9 @@ fn rotated_path(path: &Path, index: usize) -> PathBuf {
 
 pub struct NoopExecutor;
 
+#[async_trait]
 impl ActionExecutor for NoopExecutor {
-    fn execute(&self, request: &ActionRequest) -> Result<ActionResult, LlmOsError> {
+    async fn execute(&self, request: &ActionRequest) -> Result<ActionResult, LlmOsError> {
         Ok(ActionResult {
             version: request.version.clone(),
             status: ActionStatus::Executed,
@@ -693,7 +695,7 @@ pub async fn process_action(
         return Err(LlmOsError::ActionDenied(result.message));
     }
 
-    let execution_result = executor.execute(&request)?;
+    let execution_result = executor.execute(&request).await?;
     metrics.inc_policy_allows();
     audit_sink.emit(&build_audit_event(
         &request,
@@ -764,8 +766,9 @@ mod tests {
         }
     }
 
+    #[async_trait::async_trait]
     impl ActionExecutor for TestExecutor {
-        fn execute(
+        async fn execute(
             &self,
             request: &ActionRequest,
         ) -> Result<common_types::ActionResult, LlmOsError> {
