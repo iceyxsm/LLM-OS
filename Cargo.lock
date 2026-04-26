@@ -562,6 +562,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "llmos-benchmark-ingest"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "llmos-cli"
 version = "0.1.0"
 dependencies = [
@@ -570,6 +580,7 @@ dependencies = [
  "common-types",
  "controlplane-api",
  "hyper",
+ "llmos-kernel-profile",
  "mcp-runtime",
  "serde",
  "serde_json",
@@ -663,6 +674,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "llmos-sandbox",
  "serde",
  "serde_json",
  "tokio",
@@ -778,6 +790,7 @@ dependencies = [
  "anyhow",
  "controlplane-api",
  "hyper",
+ "llmos-identity",
  "serde",
  "serde_yaml",
  "tokio",
