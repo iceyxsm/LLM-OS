@@ -29,6 +29,12 @@ pub fn policy_metrics_handle() -> Arc<PolicyEngineMetrics> {
         .clone()
 }
 
+/// Try to get the metrics handle without initializing a default.
+/// Returns None if metrics have not been initialized yet.
+pub fn try_policy_metrics_handle() -> Option<Arc<PolicyEngineMetrics>> {
+    POLICY_METRICS.get().cloned()
+}
+
 #[derive(Debug)]
 pub struct PolicyEngineMetrics {
     evaluate_requests_total: AtomicU64,

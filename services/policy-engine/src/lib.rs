@@ -4,3 +4,4 @@ pub mod identity;
 pub mod loader;
 pub mod metrics;
 pub mod model;
+pub mod reload;

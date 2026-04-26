@@ -7,6 +7,7 @@ use policy_engine::{
     grpc::{HealthGrpcService, PolicyGrpcService},
     loader::load_policy_document,
     metrics::{init_policy_metrics, run_metrics_server, PolicyEngineMetrics},
+    reload::{poll_and_reload, SharedPolicy},
 };
 use tonic::transport::Server;
 use tracing::{info, warn};
@@ -28,11 +29,17 @@ async fn main() -> anyhow::Result<()> {
     let metrics_listen_addr: std::net::SocketAddr = std::env::var("LLMOS_POLICY_METRICS_LISTEN")
         .unwrap_or_else(|_| "127.0.0.1:9091".to_string())
         .parse()?;
-    let service = PolicyGrpcService::new(Arc::new(policy.clone()));
+    let shared = SharedPolicy::new(policy.clone());
+    let service = PolicyGrpcService::new_shared(shared.clone());
     let health_service = HealthGrpcService;
     let metrics = Arc::new(PolicyEngineMetrics::default());
     metrics.set_rules_loaded(policy.rules.len());
     init_policy_metrics(metrics.clone());
+
+    let reload_interval_secs: u64 = std::env::var("LLMOS_POLICY_RELOAD_INTERVAL_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(5);
 
     info!(
         target: "policy-engine",
@@ -41,6 +48,7 @@ async fn main() -> anyhow::Result<()> {
         rules = policy.rules.len(),
         listen = %listen_addr,
         metrics_listen = %metrics_listen_addr,
+        reload_interval_secs = reload_interval_secs,
         "policy engine online"
     );
     info!(
@@ -51,6 +59,17 @@ async fn main() -> anyhow::Result<()> {
         if let Err(err) = run_metrics_server(metrics_listen_addr, metrics).await {
             warn!(target: "policy-engine::metrics", error = %err, "metrics server stopped");
         }
+    });
+
+    let reload_path = policy_path.clone();
+    let reload_shared = shared.clone();
+    tokio::spawn(async move {
+        poll_and_reload(
+            reload_path,
+            reload_shared,
+            std::time::Duration::from_secs(reload_interval_secs),
+        )
+        .await;
     });
 
     Server::builder()
