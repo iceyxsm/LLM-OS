@@ -1,0 +1,19 @@
+{
+  "generated_utc": "2026-04-26T09:34:00Z",
+  "source_plan": "scripts/memory/benchmark_plan.csv",
+  "selection_method": {
+    "ranking_order": [
+      "median_ttft_ms (asc)",
+      "avg_tokens_per_sec (desc)",
+      "median_peak_rss_gb (asc)",
+      "compression_profile (asc)"
+    ],
+    "note": "Current dataset was produced with sample-benchmark.ps1; profile metrics are effectively tied."
+  },
+  "defaults_by_ram_class_gb": {
+    "8": "none",
+    "12": "none",
+    "16": "none"
+  },
+  "fallback_profile": "none"
+}

@@ -43,3 +43,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/memory/summarize-ben
 
 By default, summary metrics are computed from successful rows only (`run_success=true`).
 Add `-IncludeFailed` to include all rows in per-profile aggregates.
+
+## Default profile policy
+Current tier defaults are codified at:
+
+- `runtime/memory-manager/profiles/default-compression-policy.json`
+
+This mapping was derived from:
+
+1. Full matrix execution with `scripts/memory/run-benchmark-plan.ps1`
+2. Aggregate scoring on `median_ttft_ms`, `avg_tokens_per_sec`, and `median_peak_rss_gb`
+
+Recompute after collecting real benchmark data (instead of `sample-benchmark.ps1`) before using these defaults in production.
