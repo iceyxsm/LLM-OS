@@ -41,10 +41,7 @@ impl SharedPolicy {
 
     /// Replace the current policy with a new one.
     pub fn swap(&self, policy: PolicyDocument) {
-        let mut guard = self
-            .inner
-            .write()
-            .expect("shared policy lock poisoned");
+        let mut guard = self.inner.write().expect("shared policy lock poisoned");
         *guard = Arc::new(policy);
     }
 }
@@ -52,11 +49,7 @@ impl SharedPolicy {
 /// Poll a policy file for changes and reload when the modification time changes.
 ///
 /// This runs in a loop and should be spawned as a background task.
-pub async fn poll_and_reload(
-    path: PathBuf,
-    shared: SharedPolicy,
-    interval: Duration,
-) {
+pub async fn poll_and_reload(path: PathBuf, shared: SharedPolicy, interval: Duration) {
     let mut last_modified = file_modified_time(&path);
 
     loop {
@@ -103,7 +96,5 @@ pub async fn poll_and_reload(
 }
 
 fn file_modified_time(path: &Path) -> Option<SystemTime> {
-    std::fs::metadata(path)
-        .ok()
-        .and_then(|m| m.modified().ok())
+    std::fs::metadata(path).ok().and_then(|m| m.modified().ok())
 }

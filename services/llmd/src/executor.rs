@@ -96,9 +96,7 @@ mod tests {
     fn non_model_action_passes_through() {
         let backend = Arc::new(RwLock::new(MockBackend::new()));
         let executor = ModelExecutor::new(backend);
-        let result = executor
-            .execute(&test_request("network:connect"))
-            .unwrap();
+        let result = executor.execute(&test_request("network:connect")).unwrap();
         assert_eq!(result.status, ActionStatus::Executed);
         assert!(result.message.contains("network:connect"));
     }
@@ -115,9 +113,12 @@ mod tests {
     #[tokio::test]
     async fn model_invoke_with_loaded_model() {
         let mut mock = MockBackend::new();
-        mock.load(&llmos_model_runtime::ModelConfig::cpu_only("test", "/tmp/test.gguf"))
-            .await
-            .unwrap();
+        mock.load(&llmos_model_runtime::ModelConfig::cpu_only(
+            "test",
+            "/tmp/test.gguf",
+        ))
+        .await
+        .unwrap();
         let backend = Arc::new(RwLock::new(mock));
         let executor = ModelExecutor::new(backend);
         let result = executor.execute(&test_request("model:invoke")).unwrap();
