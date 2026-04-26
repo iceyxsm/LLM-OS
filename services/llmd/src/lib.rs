@@ -25,6 +25,9 @@ use hyper::{
 use tonic::{metadata::MetadataValue, transport::Channel, Request};
 use tracing::{info, warn};
 
+pub mod bus;
+pub mod secrets;
+
 #[async_trait]
 pub trait PolicyDecisionClient {
     async fn evaluate(

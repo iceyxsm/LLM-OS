@@ -11,6 +11,8 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 common-types = { path = "../../crates/common-types" }
 controlplane-api = { path = "../../crates/controlplane-api" }
+llmos-secrets = { path = "../../crates/secrets" }
+llmos-service-bus = { path = "../../crates/service-bus" }
 tonic.workspace = true
 async-trait.workspace = true
 serde_json.workspace = true
