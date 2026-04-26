@@ -5,9 +5,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use common_types::{ActionRequest, ModuleDescriptor};
 use controlplane_api::{health_service_client::HealthServiceClient, HealthCheckRequest};
 use llmd::{
-    init_runtime_metrics, process_action, run_metrics_server, AuditSink, GrpcPolicyClientConfig,
+    bus::BusAuditSink,
+    init_runtime_metrics, process_action, run_metrics_server,
+    secrets::build_llmd_secret_store,
+    AuditSink, GrpcPolicyClientConfig,
     GrpcPolicyDecisionClient, JsonlFileAuditSink, NoopExecutor, RuntimeMetrics, StdoutAuditSink,
 };
+use llmos_service_bus::LocalChannel;
 use tonic::metadata::MetadataValue;
 use tracing::{info, warn};
 
@@ -78,6 +82,9 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    let _secret_store = build_llmd_secret_store();
+    info!(target: "llmd", "secret store ready");
+
     let correlation_id = generate_id("corr");
     let audit_sink: Box<dyn AuditSink> = if let Ok(path) = std::env::var("LLMOS_AUDIT_JSONL_PATH") {
         info!(
@@ -92,6 +99,10 @@ async fn main() -> anyhow::Result<()> {
             audit_rotate_max_bytes,
             audit_rotate_max_files,
         )?)
+    } else if std::env::var("LLMOS_AUDIT_BUS").is_ok() {
+        let transport = Arc::new(LocalChannel::new());
+        info!(target: "llmd", "using service bus audit sink");
+        Box::new(BusAuditSink::new(transport, "llmd"))
     } else {
         Box::new(StdoutAuditSink)
     };
