@@ -1,0 +1,38 @@
+groups:
+  - name: llm_os_alerts
+    rules:
+      - alert: PolicyBreakerOpen
+        expr: llmos_policy_breaker_open > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "llmd circuit breaker is open"
+          description: "Policy circuit breaker has been open for more than 1 minute."
+
+      - alert: PolicyUnavailableSpike
+        expr: rate(llmos_policy_retries_total[5m]) / clamp_min(rate(llmos_policy_requests_total[5m]), 0.001) > 0.3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Policy retries are spiking"
+          description: "More than 30% of policy requests are retrying over 5 minutes."
+
+      - alert: PolicyDenySpike
+        expr: rate(llmos_policy_denies_total[5m]) / clamp_min(rate(llmos_policy_requests_total[5m]), 0.001) > 0.6
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Policy deny ratio is high"
+          description: "Policy deny ratio has stayed above 60% for 5 minutes."
+
+      - alert: PolicyEngineNoTraffic
+        expr: absent(rate(llmos_policy_engine_evaluate_requests_total[10m]))
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: "No policy-engine traffic detected"
+          description: "No policy evaluate traffic observed for 10 minutes."

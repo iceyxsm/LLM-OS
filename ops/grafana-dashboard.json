@@ -1,0 +1,60 @@
+{
+  "id": null,
+  "uid": "llm-os-overview",
+  "title": "LLM-OS Overview",
+  "tags": ["llm-os"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Policy Requests/sec",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        { "expr": "sum(rate(llmos_policy_requests_total[5m]))", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Policy Denies/sec",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        { "expr": "sum(rate(llmos_policy_denies_total[5m]))", "refId": "A" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Circuit Breaker Open",
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 8 },
+      "targets": [
+        { "expr": "max(llmos_policy_breaker_open)", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "llmd Policy Latency p95 (ms)",
+      "gridPos": { "h": 6, "w": 9, "x": 6, "y": 8 },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum by (le) (rate(llmos_policy_latency_ms_bucket[5m])))", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "policy-engine Eval Latency p95 (us)",
+      "gridPos": { "h": 6, "w": 9, "x": 15, "y": 8 },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum by (le) (rate(llmos_policy_engine_evaluate_latency_us_bucket[5m])))", "refId": "A" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Rules Loaded",
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 14 },
+      "targets": [
+        { "expr": "max(llmos_policy_engine_rules_loaded)", "refId": "A" }
+      ]
+    }
+  ]
+}

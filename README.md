@@ -63,6 +63,12 @@ When `LLMOS_AUDIT_JSONL_PATH` is set, `llmd` writes JSONL audit events and rotat
   curl http://127.0.0.1:9091/metrics
   ```
 
+## Ops package
+Monitoring stack files live under [`ops/`](E:/OCD-DEVS/LLM-OS/ops/README.md):
+- Prometheus scrape config and alert rules
+- Grafana dashboard JSON
+- Docker Compose for local observability stack
+
 ## Memory compression experiments
 See `runtime/memory-manager/README.md` and `scripts/memory/` for zram profile application and benchmark capture.
 
