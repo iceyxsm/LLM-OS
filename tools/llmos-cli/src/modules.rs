@@ -1,4 +1,4 @@
-use std::{path::PathBuf, time::Duration};
+use std::{path::{Path, PathBuf}, time::Duration};
 
 use crate::output::{render_json, OutputFormat};
 use clap::Args;
@@ -109,7 +109,7 @@ async fn probe_policy_health(endpoint: &str, timeout: Duration) -> String {
     }
 }
 
-fn probe_mcp_runtime(manifest_dir: &PathBuf) -> String {
+fn probe_mcp_runtime(manifest_dir: &Path) -> String {
     match load_manifests(manifest_dir) {
         Ok(manifests) if manifests.is_empty() => "no-manifests".to_string(),
         Ok(manifests) => format!("configured(manifests:{})", manifests.len()),
