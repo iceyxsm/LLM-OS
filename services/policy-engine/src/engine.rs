@@ -51,8 +51,11 @@ pub fn evaluate_policy(policy: &PolicyDocument, request: &PolicyRequest) -> Poli
 }
 
 fn matches_request(rule: &PolicyRule, request: &PolicyRequest) -> bool {
-    matches_pattern(&rule.subject, &request.subject)
-        && any_pattern_matches(&rule.actions, &request.action)
+    if !crate::identity::subject_matches(&rule.subject, &request.subject) {
+        return false;
+    }
+
+    any_pattern_matches(&rule.actions, &request.action)
         && any_pattern_matches(&rule.resources, &request.resource)
 }
 

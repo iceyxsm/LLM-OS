@@ -2,10 +2,15 @@
 
 Purpose: manage kernel and cgroup defaults for LLM workloads.
 
-## Responsibilities
-- Kernel config fragments
-- cgroup v2 defaults
-- OOM policy recommendations
+## Implementation
+
+The `llmos-kernel-profile` crate in `crates/kernel-profile/` provides:
+
+- `MemoryProfile` for zram/zswap compression settings
+- `CgroupDefaults` for memory limits and CPU weight
+- `OomPolicy` enum (Kill, Pause, CompressThenKill)
+- TOML loader compatible with `config/memory-profiles.toml`
+- `resolve_profile` for named profile lookup
 
 ## Interfaces
 - Inputs: profile name

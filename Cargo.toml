@@ -2,6 +2,13 @@
 members = [
   "crates/controlplane-api",
   "crates/common-types",
+  "crates/secrets",
+  "crates/identity",
+  "crates/service-bus",
+  "crates/kernel-profile",
+  "crates/sandbox",
+  "crates/benchmark-ingest",
+  "crates/model-runtime",
   "services/llmd",
   "services/mcp-runtime",
   "services/mock-mcp-plugin",

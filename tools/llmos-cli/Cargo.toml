@@ -11,6 +11,8 @@ common-types = { path = "../../crates/common-types" }
 controlplane-api = { path = "../../crates/controlplane-api" }
 mcp-runtime = { path = "../../services/mcp-runtime" }
 hyper.workspace = true
+llmos-kernel-profile = { path = "../../crates/kernel-profile" }
+llmos-benchmark-ingest = { path = "../../crates/benchmark-ingest" }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

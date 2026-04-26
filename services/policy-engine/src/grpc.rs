@@ -12,16 +12,23 @@ use crate::{
     engine::evaluate_policy,
     metrics::policy_metrics_handle,
     model::{DecisionEffect, DecisionReason, PolicyDocument, PolicyRequest},
+    reload::SharedPolicy,
 };
 
 #[derive(Clone)]
 pub struct PolicyGrpcService {
-    policy: Arc<PolicyDocument>,
+    shared: SharedPolicy,
 }
 
 impl PolicyGrpcService {
     pub fn new(policy: Arc<PolicyDocument>) -> Self {
-        Self { policy }
+        Self {
+            shared: SharedPolicy::from_arc(policy),
+        }
+    }
+
+    pub fn new_shared(shared: SharedPolicy) -> Self {
+        Self { shared }
     }
 }
 
@@ -42,7 +49,15 @@ impl PolicyService for PolicyGrpcService {
             action: request.action,
             resource: request.resource,
         };
-        let decision = evaluate_policy(&self.policy, &input);
+        if let Err(reason) = crate::identity::validate_subject(&input.subject) {
+            tracing::debug!(
+                target: "policy-engine::grpc",
+                subject = %input.subject,
+                reason = %reason,
+                "subject is not a valid workload id"
+            );
+        }
+        let decision = evaluate_policy(&self.shared.current(), &input);
         let (effect, reason, rule_id) = map_decision_fields(&decision);
         if effect == "allow" {
             metrics.inc_allow();

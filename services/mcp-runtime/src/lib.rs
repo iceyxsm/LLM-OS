@@ -8,6 +8,9 @@ use tokio::process::{Child, Command};
 use tokio::time::{timeout, Duration};
 use tracing::{info, warn};
 
+pub mod sandbox;
+pub use sandbox::{PluginSandboxConfig, resolve_sandbox};
+
 const STOP_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq, Hash)]
@@ -52,6 +55,7 @@ struct ManagedProcess {
 pub struct RuntimeManager {
     manifests: HashMap<String, PluginManifest>,
     running: HashMap<String, ManagedProcess>,
+    sandbox_configs: HashMap<String, PluginSandboxConfig>,
 }
 
 impl RuntimeManager {
@@ -59,6 +63,7 @@ impl RuntimeManager {
         Self {
             manifests,
             running: HashMap::new(),
+            sandbox_configs: HashMap::new(),
         }
     }
 
@@ -86,6 +91,14 @@ impl RuntimeManager {
             .get(id)
             .cloned()
             .ok_or_else(|| anyhow!("plugin '{}' was not found in loaded manifests", id))?;
+
+        let sandbox = sandbox::resolve_sandbox(
+            &manifest.id,
+            &manifest.capabilities,
+            "/opt/llmos/plugins",
+        );
+        self.sandbox_configs.insert(id.to_string(), sandbox);
+
         let child = spawn_process(&manifest)?;
         let pid = child.id();
         self.running
@@ -96,6 +109,11 @@ impl RuntimeManager {
             pid = ?pid,
             "plugin started"
         );
+        tracing::debug!(
+            target: "mcp-runtime",
+            plugin_id = %id,
+            "sandbox config resolved"
+        );
         Ok(())
     }
 
@@ -104,6 +122,7 @@ impl RuntimeManager {
         match self.running.remove(id) {
             Some(mut proc) => {
                 stop_process(&mut proc.child).await?;
+                self.sandbox_configs.remove(id);
                 info!(target: "mcp-runtime", plugin_id = %id, "plugin stopped");
                 Ok(())
             }
@@ -143,6 +162,10 @@ impl RuntimeManager {
                 })
             })
             .collect()
+    }
+
+    pub fn sandbox_config(&self, id: &str) -> Option<&PluginSandboxConfig> {
+        self.sandbox_configs.get(id)
     }
 
     fn reconcile_exited(&mut self) {

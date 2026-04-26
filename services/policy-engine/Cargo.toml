@@ -13,4 +13,5 @@ serde.workspace = true
 serde_yaml = "0.9"
 tonic.workspace = true
 controlplane-api = { path = "../../crates/controlplane-api" }
+llmos-identity = { path = "../../crates/identity" }
 hyper.workspace = true
