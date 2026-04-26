@@ -4,6 +4,13 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = []
+llama-cpp = ["llmos-model-runtime/llama-cpp"]
+cuda = ["llmos-model-runtime/cuda"]
+metal = ["llmos-model-runtime/metal"]
+vulkan = ["llmos-model-runtime/vulkan"]
+
 [dependencies]
 anyhow.workspace = true
 tokio.workspace = true
@@ -16,7 +23,9 @@ llmos-model-runtime = { path = "../../crates/model-runtime" }
 llmos-service-bus = { path = "../../crates/service-bus" }
 tonic.workspace = true
 async-trait.workspace = true
+serde.workspace = true
 serde_json.workspace = true
+toml = "0.8"
 hyper.workspace = true
 
 [dev-dependencies]

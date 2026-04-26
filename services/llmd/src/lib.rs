@@ -26,6 +26,7 @@ use tonic::{metadata::MetadataValue, transport::Channel, Request};
 use tracing::{info, warn};
 
 pub mod bus;
+pub mod config;
 pub mod executor;
 pub mod secrets;
 
