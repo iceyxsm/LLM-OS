@@ -49,6 +49,37 @@ impl IdentityToken {
     pub fn claims(&self) -> &TokenClaims {
         &self.claims
     }
+
+    /// Issue a signed token using HMAC-SHA256.
+    pub fn issue_signed(claims: TokenClaims, key: &[u8]) -> anyhow::Result<Self> {
+        let json = serde_json::to_vec(&claims)?;
+        let encoded = base64_encode(&json);
+        let mac = crate::hmac::hmac_sha256(key, encoded.as_bytes());
+        let signature = crate::hmac::hex_encode(&mac);
+        let raw = format!("{}.{}", encoded, signature);
+        Ok(Self { raw, claims })
+    }
+
+    /// Decode and verify a signed token.
+    pub fn decode_signed(raw: &str, key: &[u8]) -> anyhow::Result<Self> {
+        let (encoded, signature) = raw
+            .rsplit_once('.')
+            .ok_or_else(|| anyhow::anyhow!("token missing signature separator"))?;
+
+        let expected_mac = crate::hmac::hmac_sha256(key, encoded.as_bytes());
+        let expected_hex = crate::hmac::hex_encode(&expected_mac);
+
+        if !crate::hmac::constant_time_eq(signature.as_bytes(), expected_hex.as_bytes()) {
+            anyhow::bail!("token signature verification failed");
+        }
+
+        let bytes = base64_decode(encoded)?;
+        let claims: TokenClaims = serde_json::from_slice(&bytes)?;
+        Ok(Self {
+            raw: raw.to_string(),
+            claims,
+        })
+    }
 }
 
 fn base64_encode(data: &[u8]) -> String {

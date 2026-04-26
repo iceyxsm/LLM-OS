@@ -61,6 +61,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/memory/summarize-ben
 By default, summary metrics are computed from successful rows only (`run_success=true`).
 Add `-IncludeFailed` to include all rows in per-profile aggregates.
 
+## Validate benchmark plan
+Validate CSV shape and data types before or after runs:
+
+```bash
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/memory/validate-benchmark-plan.ps1 \
+  -PlanPath scripts/memory/benchmark_plan.csv
+```
+
+The validator checks required columns, duplicate `run_id`, numeric field formats,
+boolean fields, and parseable `date_utc` values.
+
 ## Default profile policy
 Current tier defaults are codified at:
 

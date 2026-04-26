@@ -1,3 +1,5 @@
+pub mod hmac;
+
 mod token;
 mod verifier;
 mod workload;

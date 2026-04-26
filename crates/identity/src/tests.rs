@@ -92,3 +92,65 @@ fn verify_for_correct_subject() {
     let expected = WorkloadId::parse("runtime/model-runtime").unwrap();
     TokenVerifier::verify_for(token.raw(), &expected).unwrap();
 }
+
+#[test]
+fn signed_token_roundtrip() {
+    let key = b"test-secret-key-for-hmac";
+    let claims = valid_claims();
+    let token = IdentityToken::issue_signed(claims.clone(), key).unwrap();
+    assert!(token.raw().contains('.'));
+
+    let decoded = IdentityToken::decode_signed(token.raw(), key).unwrap();
+    assert_eq!(decoded.claims().subject, claims.subject);
+}
+
+#[test]
+fn signed_token_rejects_wrong_key() {
+    let key = b"correct-key";
+    let wrong_key = b"wrong-key";
+    let token = IdentityToken::issue_signed(valid_claims(), key).unwrap();
+    let err = IdentityToken::decode_signed(token.raw(), wrong_key);
+    assert!(err.is_err());
+}
+
+#[test]
+fn signed_token_rejects_tampered_payload() {
+    let key = b"test-key";
+    let token = IdentityToken::issue_signed(valid_claims(), key).unwrap();
+    let raw = token.raw().to_string();
+
+    // Tamper with the payload by changing a character
+    let mut tampered = raw.clone();
+    if let Some(pos) = tampered.find('e') {
+        tampered.replace_range(pos..pos + 1, "f");
+    }
+
+    let err = IdentityToken::decode_signed(&tampered, key);
+    assert!(err.is_err());
+}
+
+#[test]
+fn verify_signed_valid_token() {
+    let key = b"verify-test-key";
+    let token = IdentityToken::issue_signed(valid_claims(), key).unwrap();
+    let verified = TokenVerifier::verify_signed(token.raw(), key).unwrap();
+    assert_eq!(
+        verified.claims().subject,
+        WorkloadId::parse("runtime/model-runtime").unwrap()
+    );
+}
+
+#[test]
+fn verify_signed_expired_token() {
+    let key = b"verify-test-key";
+    let now = now_ms();
+    let claims = TokenClaims {
+        subject: WorkloadId::parse("runtime/model-runtime").unwrap(),
+        capabilities: vec![],
+        issued_at_unix_ms: now - 120_000,
+        expires_at_unix_ms: now - 60_000,
+    };
+    let token = IdentityToken::issue_signed(claims, key).unwrap();
+    let err = TokenVerifier::verify_signed(token.raw(), key).unwrap_err();
+    assert!(matches!(err, VerificationError::Expired));
+}

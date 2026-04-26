@@ -63,6 +63,25 @@ impl TokenVerifier {
 
         Ok(token)
     }
+
+    /// Verify a signed token string, checking both HMAC signature and expiry.
+    pub fn verify_signed(raw: &str, key: &[u8]) -> Result<IdentityToken, VerificationError> {
+        let token = IdentityToken::decode_signed(raw, key)
+            .map_err(|e| VerificationError::DecodeFailed(e.to_string()))?;
+
+        let now = now_unix_millis();
+        let claims = token.claims();
+
+        if now < claims.issued_at_unix_ms {
+            return Err(VerificationError::NotYetValid);
+        }
+
+        if now >= claims.expires_at_unix_ms {
+            return Err(VerificationError::Expired);
+        }
+
+        Ok(token)
+    }
 }
 
 fn now_unix_millis() -> u128 {
