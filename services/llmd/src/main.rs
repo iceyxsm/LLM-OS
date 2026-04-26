@@ -1,10 +1,12 @@
+use std::sync::Arc;
+
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use common_types::{ActionRequest, ModuleDescriptor};
 use controlplane_api::{health_service_client::HealthServiceClient, HealthCheckRequest};
 use llmd::{
-    process_action, AuditSink, GrpcPolicyClientConfig, GrpcPolicyDecisionClient,
-    JsonlFileAuditSink, NoopExecutor, StdoutAuditSink,
+    init_runtime_metrics, process_action, run_metrics_server, AuditSink, GrpcPolicyClientConfig,
+    GrpcPolicyDecisionClient, JsonlFileAuditSink, NoopExecutor, RuntimeMetrics, StdoutAuditSink,
 };
 use tonic::metadata::MetadataValue;
 use tracing::{info, warn};
@@ -64,6 +66,17 @@ async fn main() -> anyhow::Result<()> {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(5);
+    let metrics_listen: std::net::SocketAddr = std::env::var("LLMOS_METRICS_LISTEN")
+        .unwrap_or_else(|_| "127.0.0.1:9090".to_string())
+        .parse()?;
+
+    let metrics = Arc::new(RuntimeMetrics::default());
+    init_runtime_metrics(metrics.clone());
+    tokio::spawn(async move {
+        if let Err(err) = run_metrics_server(metrics_listen, metrics).await {
+            warn!(target: "llmd::metrics", error = %err, "metrics server stopped");
+        }
+    });
 
     let correlation_id = generate_id("corr");
     let audit_sink: Box<dyn AuditSink> = if let Ok(path) = std::env::var("LLMOS_AUDIT_JSONL_PATH") {
@@ -93,6 +106,7 @@ async fn main() -> anyhow::Result<()> {
         policy_backoff_max_ms = max_backoff_ms,
         policy_breaker_threshold = breaker_threshold,
         policy_breaker_cooldown_secs = breaker_cooldown_secs,
+        metrics_listen = %metrics_listen,
         correlation_id = %correlation_id,
         "llmd bootstrap complete"
     );

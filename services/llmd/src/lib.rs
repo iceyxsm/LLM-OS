@@ -2,8 +2,12 @@ use std::{
     fs,
     fs::OpenOptions,
     io::Write,
+    net::SocketAddr,
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex, OnceLock,
+    },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -13,6 +17,11 @@ use common_types::{
     PolicyEffect,
 };
 use controlplane_api::{policy_service_client::PolicyServiceClient, EvaluatePolicyRequest};
+use hyper::{
+    body::Body,
+    service::{make_service_fn, service_fn},
+    Method, Response, Server, StatusCode,
+};
 use tonic::{metadata::MetadataValue, transport::Channel, Request};
 use tracing::{info, warn};
 
@@ -30,6 +39,204 @@ pub trait ActionExecutor {
 
 pub trait AuditSink {
     fn emit(&self, event: &AuditEvent);
+}
+
+const LATENCY_BUCKETS_MS: [u64; 10] = [5, 10, 25, 50, 100, 250, 500, 1_000, 2_500, 5_000];
+
+static RUNTIME_METRICS: OnceLock<Arc<RuntimeMetrics>> = OnceLock::new();
+
+pub fn init_runtime_metrics(metrics: Arc<RuntimeMetrics>) {
+    let _ = RUNTIME_METRICS.set(metrics);
+}
+
+pub fn runtime_metrics_handle() -> Arc<RuntimeMetrics> {
+    RUNTIME_METRICS
+        .get_or_init(|| Arc::new(RuntimeMetrics::default()))
+        .clone()
+}
+
+#[derive(Debug)]
+pub struct RuntimeMetrics {
+    policy_requests_total: AtomicU64,
+    policy_retries_total: AtomicU64,
+    policy_denies_total: AtomicU64,
+    policy_allows_total: AtomicU64,
+    policy_breaker_open_total: AtomicU64,
+    policy_breaker_open_state: AtomicU64,
+    policy_latency_sum_ms: AtomicU64,
+    policy_latency_count: AtomicU64,
+    policy_latency_bucket_counts: [AtomicU64; LATENCY_BUCKETS_MS.len()],
+    audit_write_failures_total: AtomicU64,
+    audit_last_write_failed: AtomicU64,
+}
+
+impl Default for RuntimeMetrics {
+    fn default() -> Self {
+        Self {
+            policy_requests_total: AtomicU64::new(0),
+            policy_retries_total: AtomicU64::new(0),
+            policy_denies_total: AtomicU64::new(0),
+            policy_allows_total: AtomicU64::new(0),
+            policy_breaker_open_total: AtomicU64::new(0),
+            policy_breaker_open_state: AtomicU64::new(0),
+            policy_latency_sum_ms: AtomicU64::new(0),
+            policy_latency_count: AtomicU64::new(0),
+            policy_latency_bucket_counts: std::array::from_fn(|_| AtomicU64::new(0)),
+            audit_write_failures_total: AtomicU64::new(0),
+            audit_last_write_failed: AtomicU64::new(0),
+        }
+    }
+}
+
+impl RuntimeMetrics {
+    fn inc_policy_requests(&self) {
+        self.policy_requests_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_policy_retries(&self) {
+        self.policy_retries_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_policy_denies(&self) {
+        self.policy_denies_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_policy_allows(&self) {
+        self.policy_allows_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn observe_policy_latency(&self, elapsed: Duration) {
+        let elapsed_ms = elapsed.as_millis().min(u64::MAX as u128) as u64;
+        self.policy_latency_sum_ms
+            .fetch_add(elapsed_ms, Ordering::Relaxed);
+        self.policy_latency_count.fetch_add(1, Ordering::Relaxed);
+
+        for (idx, boundary) in LATENCY_BUCKETS_MS.iter().enumerate() {
+            if elapsed_ms <= *boundary {
+                self.policy_latency_bucket_counts[idx].fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+        }
+    }
+
+    fn set_breaker_open(&self, open: bool) {
+        self.policy_breaker_open_state
+            .store(if open { 1 } else { 0 }, Ordering::Relaxed);
+    }
+
+    fn inc_breaker_open_total(&self) {
+        self.policy_breaker_open_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn mark_audit_write_failure(&self) {
+        self.audit_write_failures_total
+            .fetch_add(1, Ordering::Relaxed);
+        self.audit_last_write_failed.store(1, Ordering::Relaxed);
+    }
+
+    fn mark_audit_write_success(&self) {
+        self.audit_last_write_failed.store(0, Ordering::Relaxed);
+    }
+
+    fn render_prometheus(&self) -> String {
+        let mut out = String::new();
+        out.push_str("# TYPE llmos_policy_requests_total counter\n");
+        out.push_str(&format!(
+            "llmos_policy_requests_total {}\n",
+            self.policy_requests_total.load(Ordering::Relaxed)
+        ));
+        out.push_str("# TYPE llmos_policy_retries_total counter\n");
+        out.push_str(&format!(
+            "llmos_policy_retries_total {}\n",
+            self.policy_retries_total.load(Ordering::Relaxed)
+        ));
+        out.push_str("# TYPE llmos_policy_denies_total counter\n");
+        out.push_str(&format!(
+            "llmos_policy_denies_total {}\n",
+            self.policy_denies_total.load(Ordering::Relaxed)
+        ));
+        out.push_str("# TYPE llmos_policy_allows_total counter\n");
+        out.push_str(&format!(
+            "llmos_policy_allows_total {}\n",
+            self.policy_allows_total.load(Ordering::Relaxed)
+        ));
+        out.push_str("# TYPE llmos_policy_breaker_open_total counter\n");
+        out.push_str(&format!(
+            "llmos_policy_breaker_open_total {}\n",
+            self.policy_breaker_open_total.load(Ordering::Relaxed)
+        ));
+        out.push_str("# TYPE llmos_policy_breaker_open gauge\n");
+        out.push_str(&format!(
+            "llmos_policy_breaker_open {}\n",
+            self.policy_breaker_open_state.load(Ordering::Relaxed)
+        ));
+        out.push_str("# TYPE llmos_audit_queue_depth gauge\n");
+        out.push_str("llmos_audit_queue_depth 0\n");
+        out.push_str("# TYPE llmos_audit_write_failures_total counter\n");
+        out.push_str(&format!(
+            "llmos_audit_write_failures_total {}\n",
+            self.audit_write_failures_total.load(Ordering::Relaxed)
+        ));
+        out.push_str("# TYPE llmos_audit_last_write_failed gauge\n");
+        out.push_str(&format!(
+            "llmos_audit_last_write_failed {}\n",
+            self.audit_last_write_failed.load(Ordering::Relaxed)
+        ));
+        out.push_str("# TYPE llmos_policy_latency_ms histogram\n");
+
+        let mut cumulative = 0u64;
+        for (idx, boundary) in LATENCY_BUCKETS_MS.iter().enumerate() {
+            cumulative = cumulative
+                .saturating_add(self.policy_latency_bucket_counts[idx].load(Ordering::Relaxed));
+            out.push_str(&format!(
+                "llmos_policy_latency_ms_bucket{{le=\"{}\"}} {}\n",
+                boundary, cumulative
+            ));
+        }
+        out.push_str(&format!(
+            "llmos_policy_latency_ms_bucket{{le=\"+Inf\"}} {}\n",
+            self.policy_latency_count.load(Ordering::Relaxed)
+        ));
+        out.push_str(&format!(
+            "llmos_policy_latency_ms_sum {}\n",
+            self.policy_latency_sum_ms.load(Ordering::Relaxed)
+        ));
+        out.push_str(&format!(
+            "llmos_policy_latency_ms_count {}\n",
+            self.policy_latency_count.load(Ordering::Relaxed)
+        ));
+
+        out
+    }
+}
+
+pub async fn run_metrics_server(
+    listen_addr: SocketAddr,
+    metrics: Arc<RuntimeMetrics>,
+) -> anyhow::Result<()> {
+    let make_service = make_service_fn(move |_| {
+        let metrics = metrics.clone();
+        async move {
+            Ok::<_, std::convert::Infallible>(service_fn(move |request| {
+                let metrics = metrics.clone();
+                async move {
+                    if request.method() == Method::GET && request.uri().path() == "/metrics" {
+                        Ok::<_, std::convert::Infallible>(Response::new(Body::from(
+                            metrics.render_prometheus(),
+                        )))
+                    } else {
+                        let mut response = Response::new(Body::from("not found"));
+                        *response.status_mut() = StatusCode::NOT_FOUND;
+                        Ok(response)
+                    }
+                }
+            }))
+        }
+    });
+
+    Server::bind(&listen_addr).serve(make_service).await?;
+    Ok(())
 }
 
 pub struct StdoutAuditSink;
@@ -117,10 +324,12 @@ impl JsonlFileAuditSink {
 
 impl AuditSink for JsonlFileAuditSink {
     fn emit(&self, event: &AuditEvent) {
+        let metrics = runtime_metrics_handle();
         let mut state = match self.state.lock() {
             Ok(state) => state,
             Err(_) => {
                 warn!(target: "llmd::audit", "failed to acquire audit file lock");
+                metrics.mark_audit_write_failure();
                 return;
             }
         };
@@ -129,6 +338,7 @@ impl AuditSink for JsonlFileAuditSink {
             Ok(payload) => payload,
             Err(err) => {
                 warn!(target: "llmd::audit", error = %err, "failed to serialize audit event");
+                metrics.mark_audit_write_failure();
                 return;
             }
         };
@@ -137,6 +347,7 @@ impl AuditSink for JsonlFileAuditSink {
         if state.bytes_written + payload.len() as u64 > self.max_bytes {
             if let Err(err) = self.rotate_files(&mut state) {
                 warn!(target: "llmd::audit", error = %err, "failed to rotate audit log files");
+                metrics.mark_audit_write_failure();
                 return;
             }
         }
@@ -153,6 +364,7 @@ impl AuditSink for JsonlFileAuditSink {
                 }
                 Err(err) => {
                     warn!(target: "llmd::audit", error = %err, "failed to open audit log file");
+                    metrics.mark_audit_write_failure();
                     return;
                 }
             }
@@ -162,14 +374,17 @@ impl AuditSink for JsonlFileAuditSink {
             let file = state.file.as_mut().expect("file must be present");
             if let Err(err) = file.write_all(&payload) {
                 warn!(target: "llmd::audit", error = %err, "failed to write audit event");
+                metrics.mark_audit_write_failure();
                 return;
             }
             if let Err(err) = file.flush() {
                 warn!(target: "llmd::audit", error = %err, "failed to flush audit log file");
+                metrics.mark_audit_write_failure();
                 return;
             }
         }
         state.bytes_written = state.bytes_written.saturating_add(payload.len() as u64);
+        metrics.mark_audit_write_success();
     }
 }
 
@@ -262,6 +477,9 @@ impl PolicyDecisionClient for GrpcPolicyDecisionClient {
         &mut self,
         request: &ActionRequest,
     ) -> Result<PolicyDecisionRecord, LlmOsError> {
+        let metrics = runtime_metrics_handle();
+        metrics.inc_policy_requests();
+        let started = Instant::now();
         self.fail_if_circuit_open()?;
 
         for attempt in 1..=self.max_attempts {
@@ -273,6 +491,7 @@ impl PolicyDecisionClient for GrpcPolicyDecisionClient {
             match call_result {
                 Ok(Ok(response)) => {
                     self.mark_success();
+                    metrics.observe_policy_latency(started.elapsed());
                     return Ok(map_grpc_decision(request, response.into_inner()));
                 }
                 Ok(Err(status)) => {
@@ -284,6 +503,7 @@ impl PolicyDecisionClient for GrpcPolicyDecisionClient {
                     );
 
                     if retryable && attempt < self.max_attempts {
+                        metrics.inc_policy_retries();
                         tokio::time::sleep(backoff_for_attempt(
                             attempt,
                             self.initial_backoff,
@@ -294,10 +514,12 @@ impl PolicyDecisionClient for GrpcPolicyDecisionClient {
                     }
 
                     self.mark_failure();
+                    metrics.observe_policy_latency(started.elapsed());
                     return Err(LlmOsError::PolicyUnavailable(message));
                 }
                 Err(_) => {
                     if attempt < self.max_attempts {
+                        metrics.inc_policy_retries();
                         tokio::time::sleep(backoff_for_attempt(
                             attempt,
                             self.initial_backoff,
@@ -308,6 +530,7 @@ impl PolicyDecisionClient for GrpcPolicyDecisionClient {
                     }
 
                     self.mark_failure();
+                    metrics.observe_policy_latency(started.elapsed());
                     return Err(LlmOsError::PolicyUnavailable(
                         "policy evaluation timed out; denying request by default".to_string(),
                     ));
@@ -316,6 +539,7 @@ impl PolicyDecisionClient for GrpcPolicyDecisionClient {
         }
 
         self.mark_failure();
+        metrics.observe_policy_latency(started.elapsed());
         Err(LlmOsError::PolicyUnavailable(
             "policy service failed after retries".to_string(),
         ))
@@ -393,13 +617,16 @@ fn backoff_for_attempt(attempt: usize, initial: Duration, max: Duration) -> Dura
 
 impl GrpcPolicyDecisionClient {
     fn fail_if_circuit_open(&mut self) -> Result<(), LlmOsError> {
+        let metrics = runtime_metrics_handle();
         if let Some(until) = self.circuit_open_until {
             if Instant::now() < until {
+                metrics.set_breaker_open(true);
                 return Err(LlmOsError::PolicyUnavailable(
                     "policy circuit breaker open; failing closed".to_string(),
                 ));
             }
             self.circuit_open_until = None;
+            metrics.set_breaker_open(false);
         }
         Ok(())
     }
@@ -407,12 +634,16 @@ impl GrpcPolicyDecisionClient {
     fn mark_success(&mut self) {
         self.consecutive_failures = 0;
         self.circuit_open_until = None;
+        runtime_metrics_handle().set_breaker_open(false);
     }
 
     fn mark_failure(&mut self) {
         self.consecutive_failures = self.consecutive_failures.saturating_add(1);
         if self.consecutive_failures >= self.circuit_breaker_threshold {
             self.circuit_open_until = Some(Instant::now() + self.circuit_breaker_cooldown);
+            let metrics = runtime_metrics_handle();
+            metrics.set_breaker_open(true);
+            metrics.inc_breaker_open_total();
         }
     }
 }
@@ -423,6 +654,7 @@ pub async fn process_action(
     executor: &dyn ActionExecutor,
     audit_sink: &dyn AuditSink,
 ) -> Result<ActionResult, LlmOsError> {
+    let metrics = runtime_metrics_handle();
     let decision_record = match policy_client.evaluate(&request).await {
         Ok(decision) => decision,
         Err(err) => {
@@ -439,6 +671,7 @@ pub async fn process_action(
                 message,
             };
             audit_sink.emit(&build_audit_event(&request, denied, result.status));
+            metrics.inc_policy_denies();
             return Err(LlmOsError::ActionDenied(result.message));
         }
     };
@@ -450,10 +683,12 @@ pub async fn process_action(
             message: decision_record.reason.clone(),
         };
         audit_sink.emit(&build_audit_event(&request, decision_record, result.status));
+        metrics.inc_policy_denies();
         return Err(LlmOsError::ActionDenied(result.message));
     }
 
     let execution_result = executor.execute(&request)?;
+    metrics.inc_policy_allows();
     audit_sink.emit(&build_audit_event(
         &request,
         decision_record,
@@ -495,6 +730,7 @@ mod tests {
             atomic::{AtomicUsize, Ordering},
             Mutex,
         },
+        time::Duration,
     };
 
     use common_types::{
@@ -503,7 +739,7 @@ mod tests {
 
     use crate::{
         now_unix_millis, process_action, ActionExecutor, AuditSink, JsonlFileAuditSink,
-        PolicyDecisionClient,
+        PolicyDecisionClient, RuntimeMetrics,
     };
 
     struct TestExecutor {
@@ -756,5 +992,28 @@ mod tests {
         let _ = std::fs::remove_file(path);
         let _ = std::fs::remove_file(rotated_1);
         let _ = std::fs::remove_file(rotated_2);
+    }
+
+    #[test]
+    fn metrics_render_includes_policy_and_audit_fields() {
+        let metrics = RuntimeMetrics::default();
+        metrics.inc_policy_requests();
+        metrics.inc_policy_retries();
+        metrics.inc_policy_denies();
+        metrics.inc_policy_allows();
+        metrics.observe_policy_latency(Duration::from_millis(42));
+        metrics.inc_breaker_open_total();
+        metrics.set_breaker_open(true);
+        metrics.mark_audit_write_failure();
+
+        let rendered = metrics.render_prometheus();
+
+        assert!(rendered.contains("llmos_policy_requests_total 1"));
+        assert!(rendered.contains("llmos_policy_retries_total 1"));
+        assert!(rendered.contains("llmos_policy_denies_total 1"));
+        assert!(rendered.contains("llmos_policy_allows_total 1"));
+        assert!(rendered.contains("llmos_policy_breaker_open 1"));
+        assert!(rendered.contains("llmos_audit_write_failures_total 1"));
+        assert!(rendered.contains("llmos_policy_latency_ms_count 1"));
     }
 }

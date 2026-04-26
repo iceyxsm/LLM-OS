@@ -551,6 +551,7 @@ dependencies = [
  "async-trait",
  "common-types",
  "controlplane-api",
+ "hyper",
  "policy-engine",
  "serde_json",
  "tokio",

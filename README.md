@@ -49,6 +49,14 @@ When `LLMOS_AUDIT_JSONL_PATH` is set, `llmd` writes JSONL audit events and rotat
 - `LLMOS_AUDIT_ROTATE_MAX_BYTES` default: `10485760` (10 MB)
 - `LLMOS_AUDIT_ROTATE_MAX_FILES` default: `5`
 
+## Metrics endpoint
+`llmd` exposes Prometheus-compatible metrics at `GET /metrics`.
+- `LLMOS_METRICS_LISTEN` default: `127.0.0.1:9090`
+- Example:
+  ```bash
+  curl http://127.0.0.1:9090/metrics
+  ```
+
 ## Memory compression experiments
 See `runtime/memory-manager/README.md` and `scripts/memory/` for zram profile application and benchmark capture.
 
