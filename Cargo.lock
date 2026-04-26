@@ -552,6 +552,8 @@ dependencies = [
  "common-types",
  "controlplane-api",
  "hyper",
+ "llmos-secrets",
+ "llmos-service-bus",
  "policy-engine",
  "serde_json",
  "tokio",
@@ -580,6 +582,7 @@ dependencies = [
  "common-types",
  "controlplane-api",
  "hyper",
+ "llmos-benchmark-ingest",
  "llmos-kernel-profile",
  "mcp-runtime",
  "serde",
@@ -607,6 +610,19 @@ dependencies = [
  "serde",
  "thiserror",
  "toml",
+ "tracing",
+]
+
+[[package]]
+name = "llmos-model-runtime"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
  "tracing",
 ]
 
