@@ -13,4 +13,3 @@ pub fn load_policy_document(path: &Path) -> Result<PolicyDocument> {
 
     Ok(policy)
 }
-

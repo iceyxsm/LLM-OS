@@ -47,4 +47,3 @@ pub enum DecisionReason {
     MatchedDeny { rule_id: String },
     NoMatch,
 }
-

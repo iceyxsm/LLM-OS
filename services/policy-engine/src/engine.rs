@@ -1,5 +1,6 @@
 use crate::model::{
-    DecisionEffect, DecisionReason, PolicyDecision, PolicyDocument, PolicyRequest, PolicyRule, RuleEffect,
+    DecisionEffect, DecisionReason, PolicyDecision, PolicyDocument, PolicyRequest, PolicyRule,
+    RuleEffect,
 };
 
 pub fn evaluate_policy(policy: &PolicyDocument, request: &PolicyRequest) -> PolicyDecision {
@@ -56,7 +57,9 @@ fn matches_request(rule: &PolicyRule, request: &PolicyRequest) -> bool {
 }
 
 fn any_pattern_matches(patterns: &[String], value: &str) -> bool {
-    patterns.iter().any(|pattern| matches_pattern(pattern, value))
+    patterns
+        .iter()
+        .any(|pattern| matches_pattern(pattern, value))
 }
 
 fn matches_pattern(pattern: &str, value: &str) -> bool {
@@ -74,7 +77,9 @@ fn matches_pattern(pattern: &str, value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use crate::engine::evaluate_policy;
-    use crate::model::{DecisionEffect, DecisionReason, PolicyDocument, PolicyRequest, PolicyRule, RuleEffect};
+    use crate::model::{
+        DecisionEffect, DecisionReason, PolicyDocument, PolicyRequest, PolicyRule, RuleEffect,
+    };
 
     fn test_policy(rules: Vec<PolicyRule>) -> PolicyDocument {
         PolicyDocument {
@@ -174,4 +179,3 @@ mod tests {
         assert_eq!(decision.effect, DecisionEffect::Allow);
     }
 }
-
