@@ -1,10 +1,12 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use common_types::{ActionRequest, ModuleDescriptor};
+use controlplane_api::{health_service_client::HealthServiceClient, HealthCheckRequest};
 use llmd::{
     process_action, AuditSink, GrpcPolicyClientConfig, GrpcPolicyDecisionClient,
     JsonlFileAuditSink, NoopExecutor, StdoutAuditSink,
 };
+use tonic::metadata::MetadataValue;
 use tracing::{info, warn};
 
 static REQUEST_SEQ: AtomicU64 = AtomicU64::new(1);
@@ -50,6 +52,10 @@ async fn main() -> anyhow::Result<()> {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(5);
+    let health_interval_secs = std::env::var("LLMOS_POLICY_HEALTH_INTERVAL_SECS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(30);
 
     let correlation_id = generate_id("corr");
     let audit_sink: Box<dyn AuditSink> = if let Ok(path) = std::env::var("LLMOS_AUDIT_JSONL_PATH") {
@@ -82,7 +88,48 @@ async fn main() -> anyhow::Result<()> {
         circuit_breaker_cooldown: std::time::Duration::from_secs(breaker_cooldown_secs),
     };
     let mut policy_client =
-        GrpcPolicyDecisionClient::connect_with_config(endpoint, policy_config).await?;
+        GrpcPolicyDecisionClient::connect_with_config(endpoint.clone(), policy_config).await?;
+
+    match check_policy_health(&endpoint, timeout_per_attempt, &correlation_id).await {
+        Ok((status, detail)) => info!(
+            target: "llmd",
+            health_status = %status,
+            health_detail = %detail,
+            "policy service preflight check passed"
+        ),
+        Err(err) => {
+            warn!(
+                target: "llmd",
+                error = %err,
+                "policy service preflight check failed; continuing in fail-closed mode"
+            );
+        }
+    }
+
+    let health_endpoint = endpoint.clone();
+    let health_correlation = correlation_id.clone();
+    tokio::spawn(async move {
+        let mut interval =
+            tokio::time::interval(std::time::Duration::from_secs(health_interval_secs));
+        loop {
+            interval.tick().await;
+            match check_policy_health(&health_endpoint, timeout_per_attempt, &health_correlation)
+                .await
+            {
+                Ok((status, detail)) => info!(
+                    target: "llmd::health",
+                    health_status = %status,
+                    health_detail = %detail,
+                    "policy service health check passed"
+                ),
+                Err(err) => warn!(
+                    target: "llmd::health",
+                    error = %err,
+                    "policy service health check failed"
+                ),
+            }
+        }
+    });
     let executor = NoopExecutor;
     let startup_requests = [
         build_request(
@@ -129,4 +176,27 @@ fn generate_id(prefix: &str) -> String {
         .unwrap_or_default();
     let sequence = REQUEST_SEQ.fetch_add(1, Ordering::Relaxed);
     format!("{}-{}-{}", prefix, ts, sequence)
+}
+
+async fn check_policy_health(
+    endpoint: &str,
+    timeout: std::time::Duration,
+    correlation_id: &str,
+) -> anyhow::Result<(String, String)> {
+    let mut client = HealthServiceClient::connect(endpoint.to_string()).await?;
+    let mut request = tonic::Request::new(HealthCheckRequest {
+        service: "policy-engine".to_string(),
+    });
+    request.metadata_mut().insert(
+        "x-request-id",
+        MetadataValue::try_from(generate_id("health-req").as_str())?,
+    );
+    request
+        .metadata_mut()
+        .insert("x-correlation-id", MetadataValue::try_from(correlation_id)?);
+
+    let response = tokio::time::timeout(timeout, client.check(request))
+        .await??
+        .into_inner();
+    Ok((response.status, response.detail))
 }

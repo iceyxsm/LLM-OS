@@ -567,6 +567,9 @@ dependencies = [
  "anyhow",
  "clap",
  "common-types",
+ "controlplane-api",
+ "tokio",
+ "tonic",
 ]
 
 [[package]]

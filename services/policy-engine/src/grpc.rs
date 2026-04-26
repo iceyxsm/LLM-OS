@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use controlplane_api::{
-    policy_service_server::PolicyService, EvaluatePolicyRequest, EvaluatePolicyResponse,
+    health_service_server::HealthService, policy_service_server::PolicyService,
+    EvaluatePolicyRequest, EvaluatePolicyResponse, HealthCheckRequest, HealthCheckResponse,
 };
 use tonic::{Request, Response, Status};
 use tracing::info;
@@ -58,6 +59,39 @@ impl PolicyService for PolicyGrpcService {
     }
 }
 
+#[derive(Clone, Default)]
+pub struct HealthGrpcService;
+
+#[tonic::async_trait]
+impl HealthService for HealthGrpcService {
+    async fn check(
+        &self,
+        request: Request<HealthCheckRequest>,
+    ) -> Result<Response<HealthCheckResponse>, Status> {
+        let request_id = metadata_value(&request, "x-request-id");
+        let correlation_id = metadata_value(&request, "x-correlation-id");
+        let request = request.into_inner();
+        let service = if request.service.is_empty() {
+            "policy-engine".to_string()
+        } else {
+            request.service
+        };
+
+        info!(
+            target: "policy-engine::health",
+            request_id = request_id.as_deref().unwrap_or("missing"),
+            correlation_id = correlation_id.as_deref().unwrap_or("missing"),
+            service = %service,
+            "health check responded"
+        );
+
+        Ok(Response::new(HealthCheckResponse {
+            status: "SERVING".to_string(),
+            detail: format!("{service} ready"),
+        }))
+    }
+}
+
 fn map_decision_fields(decision: &crate::model::PolicyDecision) -> (String, String, String) {
     let effect = match decision.effect {
         DecisionEffect::Allow => "allow".to_string(),
@@ -83,7 +117,7 @@ fn map_decision_fields(decision: &crate::model::PolicyDecision) -> (String, Stri
     }
 }
 
-fn metadata_value(request: &Request<EvaluatePolicyRequest>, key: &str) -> Option<String> {
+fn metadata_value<T>(request: &Request<T>, key: &str) -> Option<String> {
     request
         .metadata()
         .get(key)

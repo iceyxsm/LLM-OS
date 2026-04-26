@@ -8,3 +8,6 @@ license.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 common-types = { path = "../../crates/common-types" }
+controlplane-api = { path = "../../crates/controlplane-api" }
+tokio.workspace = true
+tonic.workspace = true

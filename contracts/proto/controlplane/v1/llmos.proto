@@ -10,6 +10,10 @@ service PolicyService {
   rpc Evaluate(EvaluatePolicyRequest) returns (EvaluatePolicyResponse);
 }
 
+service HealthService {
+  rpc Check(HealthCheckRequest) returns (HealthCheckResponse);
+}
+
 message ListModulesRequest {}
 
 message ModuleInfo {
@@ -32,4 +36,13 @@ message EvaluatePolicyResponse {
   string effect = 1;
   string reason = 2;
   string rule_id = 3;
+}
+
+message HealthCheckRequest {
+  string service = 1;
+}
+
+message HealthCheckResponse {
+  string status = 1;
+  string detail = 2;
 }

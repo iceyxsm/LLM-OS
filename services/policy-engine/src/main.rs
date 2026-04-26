@@ -1,7 +1,12 @@
 use std::{path::PathBuf, sync::Arc};
 
-use controlplane_api::policy_service_server::PolicyServiceServer;
-use policy_engine::{grpc::PolicyGrpcService, loader::load_policy_document};
+use controlplane_api::{
+    health_service_server::HealthServiceServer, policy_service_server::PolicyServiceServer,
+};
+use policy_engine::{
+    grpc::{HealthGrpcService, PolicyGrpcService},
+    loader::load_policy_document,
+};
 use tonic::transport::Server;
 use tracing::info;
 
@@ -20,6 +25,7 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|_| "127.0.0.1:50051".to_string())
         .parse()?;
     let service = PolicyGrpcService::new(Arc::new(policy.clone()));
+    let health_service = HealthGrpcService;
 
     info!(
         target: "policy-engine",
@@ -36,6 +42,7 @@ async fn main() -> anyhow::Result<()> {
 
     Server::builder()
         .add_service(PolicyServiceServer::new(service))
+        .add_service(HealthServiceServer::new(health_service))
         .serve_with_shutdown(listen_addr, async {
             let _ = tokio::signal::ctrl_c().await;
         })
