@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "crates/controlplane-api",
   "crates/common-types",
   "services/llmd",
   "services/mcp-runtime",
@@ -22,3 +23,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "tim
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 thiserror = "2"
+tonic = { version = "0.11", features = ["transport"] }
+prost = "0.12"
+tonic-build = "0.11"
+async-trait = "0.1"

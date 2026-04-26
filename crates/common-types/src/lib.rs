@@ -63,4 +63,6 @@ pub enum LlmOsError {
     ModuleNotFound(String),
     #[error("action denied: {0}")]
     ActionDenied(String),
+    #[error("policy unavailable: {0}")]
+    PolicyUnavailable(String),
 }

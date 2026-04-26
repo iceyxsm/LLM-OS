@@ -10,4 +10,10 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 common-types = { path = "../../crates/common-types" }
+controlplane-api = { path = "../../crates/controlplane-api" }
+tonic.workspace = true
+async-trait.workspace = true
+
+[dev-dependencies]
+tokio-stream = { version = "0.1", features = ["net"] }
 policy-engine = { path = "../policy-engine" }

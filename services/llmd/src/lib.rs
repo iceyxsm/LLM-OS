@@ -1,13 +1,21 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use async_trait::async_trait;
 use common_types::{
     ActionRequest, ActionResult, ActionStatus, AuditEvent, LlmOsError, PolicyDecisionRecord,
     PolicyEffect,
 };
-use policy_engine::model::{
-    DecisionEffect, DecisionReason, PolicyDecision, PolicyDocument, PolicyRequest,
-};
+use controlplane_api::{policy_service_client::PolicyServiceClient, EvaluatePolicyRequest};
+use tonic::transport::Channel;
 use tracing::info;
+
+#[async_trait]
+pub trait PolicyDecisionClient {
+    async fn evaluate(
+        &mut self,
+        request: &ActionRequest,
+    ) -> Result<PolicyDecisionRecord, LlmOsError>;
+}
 
 pub trait ActionExecutor {
     fn execute(&self, request: &ActionRequest) -> Result<ActionResult, LlmOsError>;
@@ -40,19 +48,90 @@ impl ActionExecutor for NoopExecutor {
     }
 }
 
-pub fn process_action(
-    policy: &PolicyDocument,
+pub struct GrpcPolicyDecisionClient {
+    inner: PolicyServiceClient<Channel>,
+    timeout: Duration,
+}
+
+impl GrpcPolicyDecisionClient {
+    pub async fn connect(endpoint: String, timeout: Duration) -> anyhow::Result<Self> {
+        let inner = PolicyServiceClient::connect(endpoint).await?;
+        Ok(Self { inner, timeout })
+    }
+}
+
+#[async_trait]
+impl PolicyDecisionClient for GrpcPolicyDecisionClient {
+    async fn evaluate(
+        &mut self,
+        request: &ActionRequest,
+    ) -> Result<PolicyDecisionRecord, LlmOsError> {
+        let evaluate_request = EvaluatePolicyRequest {
+            subject: request.subject.clone(),
+            action: request.action.clone(),
+            resource: request.resource.clone(),
+        };
+
+        let rpc_result = tokio::time::timeout(self.timeout, self.inner.evaluate(evaluate_request))
+            .await
+            .map_err(|_| {
+                LlmOsError::PolicyUnavailable(
+                    "policy evaluation timed out; denying request by default".to_string(),
+                )
+            })?
+            .map_err(|status| {
+                LlmOsError::PolicyUnavailable(format!(
+                    "policy service returned error: {}",
+                    status.message()
+                ))
+            })?
+            .into_inner();
+
+        let effect = match rpc_result.effect.as_str() {
+            "allow" => PolicyEffect::Allow,
+            _ => PolicyEffect::Deny,
+        };
+
+        let rule_id = if rpc_result.rule_id.is_empty() {
+            None
+        } else {
+            Some(rpc_result.rule_id)
+        };
+
+        Ok(PolicyDecisionRecord {
+            version: request.version.clone(),
+            effect,
+            reason: rpc_result.reason,
+            rule_id,
+        })
+    }
+}
+
+pub async fn process_action(
+    policy_client: &mut dyn PolicyDecisionClient,
     request: ActionRequest,
     executor: &dyn ActionExecutor,
     audit_sink: &dyn AuditSink,
 ) -> Result<ActionResult, LlmOsError> {
-    let policy_request = PolicyRequest {
-        subject: request.subject.clone(),
-        action: request.action.clone(),
-        resource: request.resource.clone(),
+    let decision_record = match policy_client.evaluate(&request).await {
+        Ok(decision) => decision,
+        Err(err) => {
+            let message = format!("policy unavailable: {}; request denied", err);
+            let denied = PolicyDecisionRecord {
+                version: request.version.clone(),
+                effect: PolicyEffect::Deny,
+                reason: message.clone(),
+                rule_id: None,
+            };
+            let result = ActionResult {
+                version: request.version.clone(),
+                status: ActionStatus::Denied,
+                message,
+            };
+            audit_sink.emit(&build_audit_event(&request, denied, result.status));
+            return Err(LlmOsError::ActionDenied(result.message));
+        }
     };
-    let policy_decision = policy_engine::engine::evaluate_policy(policy, &policy_request);
-    let decision_record = map_decision(&policy_decision);
 
     if decision_record.effect == PolicyEffect::Deny {
         let result = ActionResult {
@@ -71,32 +150,6 @@ pub fn process_action(
         execution_result.status,
     ));
     Ok(execution_result)
-}
-
-fn map_decision(decision: &PolicyDecision) -> PolicyDecisionRecord {
-    match &decision.reason {
-        DecisionReason::MatchedAllow { rule_id } => PolicyDecisionRecord {
-            version: "v1".to_string(),
-            effect: PolicyEffect::Allow,
-            reason: "allowed by matching rule".to_string(),
-            rule_id: Some(rule_id.clone()),
-        },
-        DecisionReason::MatchedDeny { rule_id } => PolicyDecisionRecord {
-            version: "v1".to_string(),
-            effect: PolicyEffect::Deny,
-            reason: "denied by matching rule".to_string(),
-            rule_id: Some(rule_id.clone()),
-        },
-        DecisionReason::NoMatch => PolicyDecisionRecord {
-            version: "v1".to_string(),
-            effect: match decision.effect {
-                DecisionEffect::Allow => PolicyEffect::Allow,
-                DecisionEffect::Deny => PolicyEffect::Deny,
-            },
-            reason: "denied by default because no matching rule was found".to_string(),
-            rule_id: None,
-        },
-    }
 }
 
 fn build_audit_event(
@@ -129,10 +182,11 @@ mod tests {
         Mutex,
     };
 
-    use common_types::{ActionRequest, ActionStatus, AuditEvent, LlmOsError, PolicyEffect};
-    use policy_engine::model::{PolicyDocument, PolicyRule, RuleEffect};
+    use common_types::{
+        ActionRequest, ActionStatus, AuditEvent, LlmOsError, PolicyDecisionRecord, PolicyEffect,
+    };
 
-    use crate::{process_action, ActionExecutor, AuditSink};
+    use crate::{process_action, ActionExecutor, AuditSink, PolicyDecisionClient};
 
     struct TestExecutor {
         calls: AtomicUsize,
@@ -189,10 +243,30 @@ mod tests {
         }
     }
 
-    fn build_policy(rules: Vec<PolicyRule>) -> PolicyDocument {
-        PolicyDocument {
-            version: "v1".to_string(),
-            rules,
+    struct FakePolicyClient {
+        decision: Option<PolicyDecisionRecord>,
+        error: Option<LlmOsError>,
+    }
+
+    #[async_trait::async_trait]
+    impl PolicyDecisionClient for FakePolicyClient {
+        async fn evaluate(
+            &mut self,
+            _request: &ActionRequest,
+        ) -> Result<PolicyDecisionRecord, LlmOsError> {
+            if let Some(err) = &self.error {
+                return Err(match err {
+                    LlmOsError::PolicyUnavailable(msg) => {
+                        LlmOsError::PolicyUnavailable(msg.clone())
+                    }
+                    LlmOsError::ActionDenied(msg) => LlmOsError::ActionDenied(msg.clone()),
+                    LlmOsError::ModuleNotFound(msg) => LlmOsError::ModuleNotFound(msg.clone()),
+                });
+            }
+
+            self.decision
+                .clone()
+                .ok_or_else(|| LlmOsError::PolicyUnavailable("missing fake decision".to_string()))
         }
     }
 
@@ -205,19 +279,22 @@ mod tests {
         }
     }
 
-    #[test]
-    fn allow_path_executes_action_and_emits_audit() {
-        let policy = build_policy(vec![PolicyRule {
-            id: "allow-network".to_string(),
-            effect: RuleEffect::Allow,
-            subject: "runtime/model-runtime".to_string(),
-            actions: vec!["network:connect".to_string()],
-            resources: vec!["api.openai.com".to_string()],
-        }]);
+    #[tokio::test]
+    async fn allow_path_executes_action_and_emits_audit() {
+        let mut policy = FakePolicyClient {
+            decision: Some(PolicyDecisionRecord {
+                version: "v1".to_string(),
+                effect: PolicyEffect::Allow,
+                reason: "allowed by matching rule".to_string(),
+                rule_id: Some("allow-network".to_string()),
+            }),
+            error: None,
+        };
         let executor = TestExecutor::new();
         let audit = RecordingAuditSink::default();
 
-        let result = process_action(&policy, request(), &executor, &audit)
+        let result = process_action(&mut policy, request(), &executor, &audit)
+            .await
             .expect("action should be allowed");
 
         assert_eq!(result.status, ActionStatus::Executed);
@@ -227,19 +304,22 @@ mod tests {
         assert_eq!(event.outcome, ActionStatus::Executed);
     }
 
-    #[test]
-    fn explicit_deny_does_not_execute_action() {
-        let policy = build_policy(vec![PolicyRule {
-            id: "deny-network".to_string(),
-            effect: RuleEffect::Deny,
-            subject: "runtime/model-runtime".to_string(),
-            actions: vec!["network:connect".to_string()],
-            resources: vec!["api.openai.com".to_string()],
-        }]);
+    #[tokio::test]
+    async fn explicit_deny_does_not_execute_action() {
+        let mut policy = FakePolicyClient {
+            decision: Some(PolicyDecisionRecord {
+                version: "v1".to_string(),
+                effect: PolicyEffect::Deny,
+                reason: "denied by matching rule".to_string(),
+                rule_id: Some("deny-network".to_string()),
+            }),
+            error: None,
+        };
         let executor = TestExecutor::new();
         let audit = RecordingAuditSink::default();
 
-        let err = process_action(&policy, request(), &executor, &audit)
+        let err = process_action(&mut policy, request(), &executor, &audit)
+            .await
             .expect_err("action should be denied");
 
         assert!(matches!(err, LlmOsError::ActionDenied(_)));
@@ -249,20 +329,20 @@ mod tests {
         assert_eq!(event.outcome, ActionStatus::Denied);
     }
 
-    #[test]
-    fn no_match_is_denied_and_does_not_execute_action() {
-        let policy = build_policy(vec![PolicyRule {
-            id: "allow-filesystem".to_string(),
-            effect: RuleEffect::Allow,
-            subject: "runtime/mcp-runtime".to_string(),
-            actions: vec!["fs:write".to_string()],
-            resources: vec!["/tmp/*".to_string()],
-        }]);
+    #[tokio::test]
+    async fn policy_error_fails_closed_and_does_not_execute_action() {
+        let mut policy = FakePolicyClient {
+            decision: None,
+            error: Some(LlmOsError::PolicyUnavailable(
+                "connection refused".to_string(),
+            )),
+        };
         let executor = TestExecutor::new();
         let audit = RecordingAuditSink::default();
 
-        let err = process_action(&policy, request(), &executor, &audit)
-            .expect_err("no-match should deny");
+        let err = process_action(&mut policy, request(), &executor, &audit)
+            .await
+            .expect_err("policy error should deny");
 
         assert!(matches!(err, LlmOsError::ActionDenied(_)));
         assert_eq!(executor.calls(), 0);

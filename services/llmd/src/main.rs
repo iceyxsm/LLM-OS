@@ -1,8 +1,5 @@
-use std::path::PathBuf;
-
 use common_types::{ActionRequest, ModuleDescriptor};
-use llmd::{process_action, NoopExecutor, StdoutAuditSink};
-use policy_engine::loader::load_policy_document;
+use llmd::{process_action, GrpcPolicyDecisionClient, NoopExecutor, StdoutAuditSink};
 use tracing::{info, warn};
 
 #[tokio::main]
@@ -18,13 +15,24 @@ async fn main() -> anyhow::Result<()> {
         status: "starting".to_string(),
     };
 
-    info!(target: "llmd", module = ?module, "llmd bootstrap complete");
+    let endpoint = std::env::var("LLMOS_POLICY_ENDPOINT")
+        .unwrap_or_else(|_| "http://127.0.0.1:50051".to_string());
+    let timeout = std::time::Duration::from_secs(
+        std::env::var("LLMOS_POLICY_TIMEOUT_SECS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(2),
+    );
 
-    let policy_path = std::env::var("LLMOS_POLICY_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("config/policy.example.yaml"));
-    let policy = load_policy_document(&policy_path)?;
+    info!(
+        target: "llmd",
+        module = ?module,
+        policy_endpoint = %endpoint,
+        policy_timeout_secs = timeout.as_secs(),
+        "llmd bootstrap complete"
+    );
 
+    let mut policy_client = GrpcPolicyDecisionClient::connect(endpoint, timeout).await?;
     let executor = NoopExecutor;
     let audit_sink = StdoutAuditSink;
     let startup_requests = [
@@ -43,7 +51,7 @@ async fn main() -> anyhow::Result<()> {
     ];
 
     for request in startup_requests {
-        match process_action(&policy, request, &executor, &audit_sink) {
+        match process_action(&mut policy_client, request, &executor, &audit_sink).await {
             Ok(result) => info!(target: "llmd", result = ?result, "action executed"),
             Err(err) => warn!(target: "llmd", error = %err, "action denied or failed"),
         }

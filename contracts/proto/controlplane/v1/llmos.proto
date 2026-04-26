@@ -6,6 +6,10 @@ service ModuleRegistry {
   rpc ListModules(ListModulesRequest) returns (ListModulesResponse);
 }
 
+service PolicyService {
+  rpc Evaluate(EvaluatePolicyRequest) returns (EvaluatePolicyResponse);
+}
+
 message ListModulesRequest {}
 
 message ModuleInfo {
@@ -16,4 +20,16 @@ message ModuleInfo {
 
 message ListModulesResponse {
   repeated ModuleInfo modules = 1;
+}
+
+message EvaluatePolicyRequest {
+  string subject = 1;
+  string action = 2;
+  string resource = 3;
+}
+
+message EvaluatePolicyResponse {
+  string effect = 1;
+  string reason = 2;
+  string rule_id = 3;
 }

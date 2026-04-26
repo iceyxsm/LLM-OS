@@ -1,10 +1,8 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
-use policy_engine::{
-    engine::evaluate_policy,
-    loader::load_policy_document,
-    model::{DecisionEffect, PolicyRequest},
-};
+use controlplane_api::policy_service_server::PolicyServiceServer;
+use policy_engine::{grpc::PolicyGrpcService, loader::load_policy_document};
+use tonic::transport::Server;
 use tracing::info;
 
 #[tokio::main]
@@ -18,53 +16,30 @@ async fn main() -> anyhow::Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("config/policy.example.yaml"));
     let policy = load_policy_document(&policy_path)?;
+    let listen_addr: std::net::SocketAddr = std::env::var("LLMOS_POLICY_LISTEN")
+        .unwrap_or_else(|_| "127.0.0.1:50051".to_string())
+        .parse()?;
+    let service = PolicyGrpcService::new(Arc::new(policy.clone()));
 
     info!(
         target: "policy-engine",
         path = %policy_path.display(),
         version = %policy.version,
         rules = policy.rules.len(),
+        listen = %listen_addr,
         "policy engine online"
     );
-    info!(target: "policy-engine", "decision mode: deny overrides allow, default deny");
+    info!(
+        target: "policy-engine",
+        "decision mode: deny overrides allow, default deny"
+    );
 
-    let probe_requests = [
-        PolicyRequest {
-            subject: "runtime/model-runtime".to_string(),
-            action: "network:connect".to_string(),
-            resource: "api.openai.com".to_string(),
-        },
-        PolicyRequest {
-            subject: "runtime/mcp-runtime".to_string(),
-            action: "fs:write".to_string(),
-            resource: "/".to_string(),
-        },
-        PolicyRequest {
-            subject: "runtime/mcp-runtime".to_string(),
-            action: "network:connect".to_string(),
-            resource: "example.com".to_string(),
-        },
-    ];
-
-    for request in probe_requests {
-        let decision = evaluate_policy(&policy, &request);
-        let effect = match decision.effect {
-            DecisionEffect::Allow => "allow",
-            DecisionEffect::Deny => "deny",
-        };
-
-        info!(
-            target: "policy-engine",
-            subject = %request.subject,
-            action = %request.action,
-            resource = %request.resource,
-            decision = effect,
-            reason = ?decision.reason,
-            "evaluated policy request"
-        );
-    }
-
-    tokio::signal::ctrl_c().await?;
-    info!(target: "policy-engine", "shutdown");
+    Server::builder()
+        .add_service(PolicyServiceServer::new(service))
+        .serve_with_shutdown(listen_addr, async {
+            let _ = tokio::signal::ctrl_c().await;
+        })
+        .await?;
+    info!(target: "policy-engine", "shutdown complete");
     Ok(())
 }
