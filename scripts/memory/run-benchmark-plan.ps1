@@ -7,6 +7,7 @@ param(
     [string[]]$RunIds = @(),
     [int]$MaxRuns = 0,
     [switch]$IncludeCompleted,
+    [switch]$MarkDryRun,
     [switch]$DryRun
 )
 
@@ -212,14 +213,16 @@ foreach ($rowIndex in $selectedIndexes) {
     }
 
     if ($DryRun) {
-        $row.run_success = "dry-run"
-        if ([string]::IsNullOrWhiteSpace($row.notes)) {
-            $row.notes = "dry-run"
-        } else {
-            $row.notes = "{0};dry-run" -f $row.notes
+        if ($MarkDryRun) {
+            $row.run_success = "dry-run"
+            if ([string]::IsNullOrWhiteSpace($row.notes)) {
+                $row.notes = "dry-run"
+            } else {
+                $row.notes = "{0};dry-run" -f $row.notes
+            }
+            Sync-RowBack -Destination $rows[$rowIndex] -Source $row
+            $rows | Export-Csv -Path $PlanPath -NoTypeInformation -Encoding utf8
         }
-        Sync-RowBack -Destination $rows[$rowIndex] -Source $row
-        $rows | Export-Csv -Path $PlanPath -NoTypeInformation -Encoding utf8
         continue
     }
 

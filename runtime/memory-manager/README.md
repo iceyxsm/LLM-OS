@@ -31,3 +31,4 @@ Notes:
 - The runner exports each row field as env vars prefixed with `LLMOS_BENCH_`.
 - Your benchmark script should print one JSON object to stdout with metric keys used in the CSV.
 - Optional hooks: `-PreRunCommand` and `-PostRunCommand` support row token expansion, for example `{compression_profile}`.
+- `-DryRun` is side-effect free by default; add `-MarkDryRun` if you want to persist `run_success=dry-run` and notes into the CSV.
