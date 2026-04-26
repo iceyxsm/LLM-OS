@@ -1,0 +1,14 @@
+[profiles.balanced]
+zram_fraction = 1.0
+compression_algo = "zstd"
+swappiness = 100
+
+[profiles.aggressive]
+zram_fraction = 1.5
+compression_algo = "zstd"
+swappiness = 180
+
+[profiles.low_latency]
+zram_fraction = 0.5
+compression_algo = "lz4"
+swappiness = 60

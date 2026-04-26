@@ -1,0 +1,12 @@
+version: v1
+rules:
+  - id: allow-model-api
+    effect: allow
+    subject: runtime/model-runtime
+    actions: ["network:connect"]
+    resources: ["api.openai.com", "api.anthropic.com"]
+  - id: deny-host-fs
+    effect: deny
+    subject: runtime/mcp-runtime
+    actions: ["fs:write"]
+    resources: ["/"]

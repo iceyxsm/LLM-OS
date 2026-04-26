@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package llmos.controlplane.v1;
+
+service ModuleRegistry {
+  rpc ListModules(ListModulesRequest) returns (ListModulesResponse);
+}
+
+message ListModulesRequest {}
+
+message ModuleInfo {
+  string id = 1;
+  string version = 2;
+  string status = 3;
+}
+
+message ListModulesResponse {
+  repeated ModuleInfo modules = 1;
+}

@@ -1,0 +1,10 @@
+[package]
+name = "llmos-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+common-types = { path = "../../crates/common-types" }

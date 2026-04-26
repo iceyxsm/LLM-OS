@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://llm-os.dev/schemas/plugin-manifest-v1.json",
+  "title": "LLM-OS Plugin Manifest v1",
+  "type": "object",
+  "required": ["id", "version", "entrypoint", "capabilities"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-z0-9._-]+$" },
+    "version": { "type": "string" },
+    "entrypoint": { "type": "string" },
+    "description": { "type": "string" },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "model:invoke",
+          "mcp:spawn",
+          "network:egress",
+          "fs:read",
+          "fs:write",
+          "audit:emit"
+        ]
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    }
+  },
+  "additionalProperties": false
+}

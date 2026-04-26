@@ -1,0 +1,11 @@
+[daemon]
+name = "llmd"
+listen = "127.0.0.1:7000"
+
+[providers]
+default = "openai"
+allowed = ["openai", "anthropic", "local"]
+
+[security]
+default_policy = "config/policy.example.yaml"
+audit_sink = "stdout"
