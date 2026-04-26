@@ -11,6 +11,8 @@ pub struct ModuleDescriptor {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ActionRequest {
     pub version: String,
+    pub request_id: String,
+    pub correlation_id: String,
     pub subject: String,
     pub action: String,
     pub resource: String,
@@ -49,6 +51,8 @@ pub enum PolicyEffect {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AuditEvent {
     pub version: String,
+    pub request_id: String,
+    pub correlation_id: String,
     pub timestamp_unix_ms: u128,
     pub subject: String,
     pub action: String,

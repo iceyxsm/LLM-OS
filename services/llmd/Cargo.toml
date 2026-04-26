@@ -13,6 +13,7 @@ common-types = { path = "../../crates/common-types" }
 controlplane-api = { path = "../../crates/controlplane-api" }
 tonic.workspace = true
 async-trait.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 tokio-stream = { version = "0.1", features = ["net"] }

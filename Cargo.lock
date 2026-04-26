@@ -552,6 +552,7 @@ dependencies = [
  "common-types",
  "controlplane-api",
  "policy-engine",
+ "serde_json",
  "tokio",
  "tokio-stream",
  "tonic",
