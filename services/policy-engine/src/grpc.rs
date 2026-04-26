@@ -42,6 +42,14 @@ impl PolicyService for PolicyGrpcService {
             action: request.action,
             resource: request.resource,
         };
+        if let Err(reason) = crate::identity::validate_subject(&input.subject) {
+            tracing::debug!(
+                target: "policy-engine::grpc",
+                subject = %input.subject,
+                reason = %reason,
+                "subject is not a valid workload id"
+            );
+        }
         let decision = evaluate_policy(&self.policy, &input);
         let (effect, reason, rule_id) = map_decision_fields(&decision);
         if effect == "allow" {
