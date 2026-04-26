@@ -33,6 +33,23 @@ Notes:
 - Optional hooks: `-PreRunCommand` and `-PostRunCommand` support row token expansion, for example `{compression_profile}`.
 - `-DryRun` is side-effect free by default; add `-MarkDryRun` if you want to persist `run_success=dry-run` and notes into the CSV.
 
+## Real benchmark script
+Use `scripts/memory/real-benchmark.ps1` to wrap your actual inference command.
+Set `LLMOS_REAL_BENCHMARK_COMMAND` once, then run the matrix with `-BenchmarkScriptPath`.
+
+Example:
+
+```powershell
+$env:LLMOS_REAL_BENCHMARK_COMMAND = "& 'E:\path\to\benchmark.exe' --model {model_name} --ctx {context_tokens} --out {output_tokens}"
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/memory/run-benchmark-plan.ps1 `
+  -PlanPath scripts/memory/benchmark_plan.csv `
+  -BenchmarkScriptPath scripts/memory/real-benchmark.ps1 `
+  -IncludeCompleted
+```
+
+Template placeholders accept either CSV field names (`{model_name}`, `{context_tokens}`, ...)
+or full env keys (`{LLMOS_BENCH_MODEL_NAME}`, `{LLMOS_BENCH_CONTEXT_TOKENS}`, ...).
+
 ## Summarize benchmark results
 Generate JSON summary statistics from a benchmark plan:
 
